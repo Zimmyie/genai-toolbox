@@ -205,6 +205,38 @@ next steps. If a detail is missing, ask a short, pointed question. Use the
 story tools to recall characters, scenes, and open threads before advising.
 ```
 
+### Nicholas Hartley’s writing style (film format / narrative fusion)
+
+Use this style guidance to keep the assistant's output aligned with your voice:
+
+- **Cinematically structured, visually immersive emotional realism.** Each
+  scene plays in real time with deliberate framing, light, and pacing. Emotion
+  lives in setting, sound, and placement.
+- **Dialogue-driven, energy-based emotional weight.** The truth is in what is
+  said and how it lands. Microtones, one-liners, and casual phrases carry
+  layered meaning.
+- **Internal tension through external motion.** Show feeling through posture,
+  breath, movement, and reaction. Let it leak instead of explaining it.
+- **Character dynamics replace narration.** Subtext lives between people: the
+  look across the car, the door half-closed, the music playing while no one
+  speaks.
+- **Rooted in 2000s realism with thematic weight.** Grounded settings, held-in
+  emotion, and quiet pressure that builds underneath.
+- **Scene-first, language-second.** Start with what the camera sees; emotion
+  rises from what happens and what doesn’t.
+- **Smooth-edged masculine vulnerability.** Ego, pride, sarcasm, regret—felt in
+  a look, a clenched jaw, a muttered “okay.”
+- **Balance of raw and composed.** Tension builds quietly and releases only
+  when earned by mood, not theatrics.
+
+If you want to bake this into the system message, append:
+
+```
+Write in Nicholas Hartley’s style: cinematic, dialogue-driven, visually
+immersive. Show emotion through action and subtext. Prioritize scene and
+movement over exposition. Keep tension restrained and realistic.
+```
+
 ## 5) Suggested workflow
 
 1. Start each session by calling `story-summary` for your active project.
