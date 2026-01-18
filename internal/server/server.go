@@ -47,6 +47,7 @@ type Server struct {
 	instrumentation *telemetry.Instrumentation
 	sseManager      *sseManager
 	ResourceMgr     *ResourceManager
+	mcpDebug        bool
 }
 
 // ResourceManager contains available resources for the server. Should be initialized with NewResourceManager().
@@ -318,6 +319,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		instrumentation: instrumentation,
 		sseManager:      sseManager,
 		ResourceMgr:     resourceManager,
+		mcpDebug:        cfg.McpDebug,
 	}
 	// control plane
 	apiR, err := apiRouter(s)
