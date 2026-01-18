@@ -28,6 +28,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog/v2"
 	"github.com/googleapis/genai-toolbox/internal/auth"
+	"github.com/googleapis/genai-toolbox/internal/chats"
 	"github.com/googleapis/genai-toolbox/internal/log"
 	"github.com/googleapis/genai-toolbox/internal/sources"
 	"github.com/googleapis/genai-toolbox/internal/telemetry"
@@ -47,6 +48,7 @@ type Server struct {
 	instrumentation *telemetry.Instrumentation
 	sseManager      *sseManager
 	ResourceMgr     *ResourceManager
+	chatStore       *chats.Store
 }
 
 // ResourceManager contains available resources for the server. Should be initialized with NewResourceManager().
@@ -309,6 +311,10 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	sseManager := newSseManager(ctx)
 
 	resourceManager := NewResourceManager(sourcesMap, authServicesMap, toolsMap, toolsetsMap)
+	chatStore, err := chats.NewStore(cfg.ChatStorageDir)
+	if err != nil {
+		return nil, err
+	}
 
 	s := &Server{
 		version:         cfg.Version,
@@ -318,6 +324,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		instrumentation: instrumentation,
 		sseManager:      sseManager,
 		ResourceMgr:     resourceManager,
+		chatStore:       chatStore,
 	}
 	// control plane
 	apiR, err := apiRouter(s)
