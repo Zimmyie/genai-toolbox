@@ -55,6 +55,8 @@ type ServerConfig struct {
 	Stdio bool
 	// DisableReload indicates if the user has disabled dynamic reloading for Toolbox.
 	DisableReload bool
+	// McpDebug indicates if MCP payloads should be logged for debugging.
+	McpDebug bool
 }
 
 type logFormat string
