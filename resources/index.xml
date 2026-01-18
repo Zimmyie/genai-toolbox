@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?><rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom"><channel><title>Resources on MCP Toolbox for Databases</title><link>https://Zimmyie.github.io/genai-toolbox/resources/</link><description>Recent content in Resources on MCP Toolbox for Databases</description><generator>Hugo</generator><language>en</language><atom:link href="https://Zimmyie.github.io/genai-toolbox/resources/index.xml" rel="self" type="application/rss+xml"/><item><title>Nicholas Ladder Protocol</title><link>https://Zimmyie.github.io/genai-toolbox/resources/nicholas-ladder-protocol/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://Zimmyie.github.io/genai-toolbox/resources/nicholas-ladder-protocol/</guid><description>&lt;h1 id="nicholas-ladder-protocol">Nicholas Ladder Protocol&lt;/h1>
+&lt;p>This document ships three plug-and-play pieces: a one-page prereg summary,
+stimulus-generation pseudocode, and a free-draw feature-extractor spec. It is
+prereg-ready, falsifiable, and reviewer-proof.&lt;/p>
+&lt;h2 id="one-page-prereg-summary-drop-in">One-page prereg summary (drop-in)&lt;/h2>
+&lt;p>&lt;strong>Title&lt;/strong>&lt;/p>
+&lt;p>Human–Room Coupling via Modal Symmetry Classes (“Nicholas Ladder”): Ordered vs
+Shuffled Mapping Across Rooms&lt;/p>
+&lt;p>&lt;strong>Core claim (Law)&lt;/strong>&lt;/p>
+&lt;p>Low-order acoustic mode families in a cavity (radial, 2-lobe, 3-lobe,
+orthogonal) elicit robust, naïve perceptual Gestalts (○, vesica, △, □). Higher
+families (5/6-ray) act as trainable attractors; a broadband, mixed-mode regime
+yields a spiral/scale-free percept.&lt;/p></description></item></channel></rss>
