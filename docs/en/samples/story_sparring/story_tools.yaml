@@ -1,0 +1,103 @@
+sources:
+  story-db:
+    kind: sqlite
+    database: ./story.db
+
+tools:
+  story-create-project:
+    kind: sqlite-sql
+    source: story-db
+    description: Create a new story project.
+    parameters:
+      - name: title
+        type: string
+      - name: logline
+        type: string
+      - name: tone
+        type: string
+    statement: |
+      INSERT INTO projects (title, logline, tone)
+      VALUES (?, ?, ?);
+
+  story-add-character:
+    kind: sqlite-sql
+    source: story-db
+    description: Add a character to a project.
+    parameters:
+      - name: project_id
+        type: integer
+      - name: name
+        type: string
+      - name: role
+        type: string
+      - name: summary
+        type: string
+      - name: arc
+        type: string
+    statement: |
+      INSERT INTO characters (project_id, name, role, summary, arc)
+      VALUES (?, ?, ?, ?, ?);
+
+  story-upsert-scene:
+    kind: sqlite-sql
+    source: story-db
+    description: Add or update a scene's goal/conflict/outcome notes.
+    parameters:
+      - name: project_id
+        type: integer
+      - name: scene_number
+        type: integer
+      - name: title
+        type: string
+      - name: goal
+        type: string
+      - name: conflict
+        type: string
+      - name: outcome
+        type: string
+      - name: notes
+        type: string
+    statement: |
+      INSERT INTO scenes (project_id, scene_number, title, goal, conflict, outcome, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id, scene_number)
+      DO UPDATE SET
+        title=excluded.title,
+        goal=excluded.goal,
+        conflict=excluded.conflict,
+        outcome=excluded.outcome,
+        notes=excluded.notes,
+        updated_at=datetime('now');
+
+  story-open-threads:
+    kind: sqlite-sql
+    source: story-db
+    description: List open story threads that still need resolution.
+    parameters:
+      - name: project_id
+        type: integer
+    statement: |
+      SELECT id, description, status, updated_at
+      FROM threads
+      WHERE project_id = ? AND status = 'open'
+      ORDER BY updated_at DESC;
+
+  story-summary:
+    kind: sqlite-sql
+    source: story-db
+    description: Pull a project summary with characters and recent scenes.
+    parameters:
+      - name: project_id
+        type: integer
+    statement: |
+      SELECT p.id, p.title, p.logline, p.tone FROM projects p WHERE p.id = ?;
+
+      SELECT name, role, summary, arc
+      FROM characters
+      WHERE project_id = ?
+      ORDER BY name;
+
+      SELECT scene_number, title, goal, conflict, outcome, notes, updated_at
+      FROM scenes
+      WHERE project_id = ?
+      ORDER BY scene_number;

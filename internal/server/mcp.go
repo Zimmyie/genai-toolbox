@@ -115,6 +115,29 @@ type stdioSession struct {
 	writer   io.Writer
 }
 
+func (s *Server) logMcpPayload(ctx context.Context, label string, payload []byte) {
+	if !s.mcpDebug {
+		return
+	}
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 {
+		return
+	}
+	s.logger.DebugContext(ctx, fmt.Sprintf("mcp %s: %s", label, trimmed))
+}
+
+func (s *Server) logMcpResponse(ctx context.Context, label string, response any) {
+	if !s.mcpDebug {
+		return
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		s.logger.DebugContext(ctx, fmt.Sprintf("mcp %s: <marshal error: %s>", label, err))
+		return
+	}
+	s.logMcpPayload(ctx, label, payload)
+}
+
 func NewStdioSession(s *Server, stdin io.Reader, stdout io.Writer) *stdioSession {
 	stdioSession := &stdioSession{
 		server: s,
@@ -141,6 +164,7 @@ func (s *stdioSession) readInputStream(ctx context.Context) error {
 			}
 			return err
 		}
+		s.server.logMcpPayload(ctx, "request", []byte(line))
 		v, res, err := processMcpMessage(ctx, []byte(line), s.server, s.protocol, "")
 		if err != nil {
 			// errors during the processing of message will generate a valid MCP Error response.
@@ -152,6 +176,7 @@ func (s *stdioSession) readInputStream(ctx context.Context) error {
 		}
 		// no responses for notifications
 		if res != nil {
+			s.server.logMcpResponse(ctx, "response", res)
 			if err = s.write(ctx, res); err != nil {
 				return err
 			}
@@ -388,6 +413,7 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		s.logger.DebugContext(ctx, err.Error())
 		render.JSON(w, r, jsonrpc.NewError(id, jsonrpc.PARSE_ERROR, err.Error(), nil))
 	}
+	s.logMcpPayload(ctx, "request", body)
 
 	v, res, err := processMcpMessage(ctx, body, s, protocolVersion, toolsetName)
 	// notifications will return empty string
@@ -400,6 +426,7 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logger.DebugContext(ctx, err.Error())
 	}
+	s.logMcpResponse(ctx, "response", res)
 
 	// for v20250326, add the `Mcp-Session-Id` header
 	if v == v20250326.PROTOCOL_VERSION {
