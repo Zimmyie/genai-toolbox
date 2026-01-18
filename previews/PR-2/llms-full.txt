@@ -5664,170 +5664,21 @@ without echoing your words.
 
 ## 1) Create a local story database
 
-Create a SQLite file (this lives on disk, so it survives restarts):
+Use the ready-to-run schema in [`story_schema.sql`](./story_schema.sql) to
+create a SQLite file (this lives on disk, so it survives restarts):
 
 ```bash
-sqlite3 ./story.db <<'SQL'
-CREATE TABLE IF NOT EXISTS projects (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  logline TEXT,
-  tone TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS characters (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  role TEXT,
-  summary TEXT,
-  arc TEXT,
-  FOREIGN KEY (project_id) REFERENCES projects(id)
-);
-
-CREATE TABLE IF NOT EXISTS scenes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL,
-  scene_number INTEGER,
-  title TEXT,
-  goal TEXT,
-  conflict TEXT,
-  outcome TEXT,
-  notes TEXT,
-  updated_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY (project_id) REFERENCES projects(id)
-);
-
-CREATE TABLE IF NOT EXISTS threads (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  project_id INTEGER NOT NULL,
-  description TEXT NOT NULL,
-  status TEXT DEFAULT 'open',
-  updated_at TEXT DEFAULT (datetime('now')),
-  FOREIGN KEY (project_id) REFERENCES projects(id)
-);
-SQL
+sqlite3 ./story.db < ./story_schema.sql
 ```
 
 ## 2) Configure Toolbox with SQLite tools
 
-Create a `tools.yaml` file that points at your database and exposes focused
-queries for story work:
+Copy the provided [`story_tools.yaml`](./story_tools.yaml) to your working
+directory so the tools point at your database:
 
-```yaml
-sources:
-  story-db:
-    kind: sqlite
-    database: ./story.db
-
-tools:
-  story-create-project:
-    kind: sqlite-sql
-    source: story-db
-    description: Create a new story project.
-    parameters:
-      - name: title
-        type: string
-      - name: logline
-        type: string
-      - name: tone
-        type: string
-    statement: |
-      INSERT INTO projects (title, logline, tone)
-      VALUES (?, ?, ?);
-
-  story-add-character:
-    kind: sqlite-sql
-    source: story-db
-    description: Add a character to a project.
-    parameters:
-      - name: project_id
-        type: integer
-      - name: name
-        type: string
-      - name: role
-        type: string
-      - name: summary
-        type: string
-      - name: arc
-        type: string
-    statement: |
-      INSERT INTO characters (project_id, name, role, summary, arc)
-      VALUES (?, ?, ?, ?, ?);
-
-  story-upsert-scene:
-    kind: sqlite-sql
-    source: story-db
-    description: Add or update a scene's goal/conflict/outcome notes.
-    parameters:
-      - name: project_id
-        type: integer
-      - name: scene_number
-        type: integer
-      - name: title
-        type: string
-      - name: goal
-        type: string
-      - name: conflict
-        type: string
-      - name: outcome
-        type: string
-      - name: notes
-        type: string
-    statement: |
-      INSERT INTO scenes (project_id, scene_number, title, goal, conflict, outcome, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(project_id, scene_number)
-      DO UPDATE SET
-        title=excluded.title,
-        goal=excluded.goal,
-        conflict=excluded.conflict,
-        outcome=excluded.outcome,
-        notes=excluded.notes,
-        updated_at=datetime('now');
-
-  story-open-threads:
-    kind: sqlite-sql
-    source: story-db
-    description: List open story threads that still need resolution.
-    parameters:
-      - name: project_id
-        type: integer
-    statement: |
-      SELECT id, description, status, updated_at
-      FROM threads
-      WHERE project_id = ? AND status = 'open'
-      ORDER BY updated_at DESC;
-
-  story-summary:
-    kind: sqlite-sql
-    source: story-db
-    description: Pull a project summary with characters and recent scenes.
-    parameters:
-      - name: project_id
-        type: integer
-    statement: |
-      SELECT p.id, p.title, p.logline, p.tone FROM projects p WHERE p.id = ?;
-
-      SELECT name, role, summary, arc
-      FROM characters
-      WHERE project_id = ?
-      ORDER BY name;
-
-      SELECT scene_number, title, goal, conflict, outcome, notes, updated_at
-      FROM scenes
-      WHERE project_id = ?
-      ORDER BY scene_number;
+```bash
+cp ./story_tools.yaml ./tools.yaml
 ```
-
-> **Note:** If you want to use the `ON CONFLICT` upsert above, add a unique
-> constraint:
->
-> ```sql
-> CREATE UNIQUE INDEX IF NOT EXISTS scenes_project_scene
-> ON scenes(project_id, scene_number);
-> ```
 
 ## 3) Run Toolbox
 
