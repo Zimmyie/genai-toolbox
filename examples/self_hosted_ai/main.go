@@ -44,11 +44,30 @@ func main() {
 	model := flag.String("model", "llama3", "Model name hosted by your provider")
 	timeout := flag.Duration("timeout", 30*time.Second, "HTTP timeout for the request")
 	prompt := flag.String("prompt", "", "Prompt to send to your self-hosted model")
+	promptFile := flag.String("prompt-file", "", "Path to a prompt file to send to your self-hosted model")
 	flag.Parse()
 
-	if strings.TrimSpace(*prompt) == "" {
-		fmt.Fprintln(os.Stderr, "prompt is required (use --prompt)")
+	if strings.TrimSpace(*prompt) == "" && strings.TrimSpace(*promptFile) == "" {
+		fmt.Fprintln(os.Stderr, "prompt is required (use --prompt or --prompt-file)")
 		os.Exit(1)
+	}
+	if strings.TrimSpace(*prompt) != "" && strings.TrimSpace(*promptFile) != "" {
+		fmt.Fprintln(os.Stderr, "provide only one of --prompt or --prompt-file")
+		os.Exit(1)
+	}
+
+	finalPrompt := strings.TrimSpace(*prompt)
+	if finalPrompt == "" {
+		contents, err := os.ReadFile(*promptFile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error reading prompt file:", err)
+			os.Exit(1)
+		}
+		finalPrompt = strings.TrimSpace(string(contents))
+		if finalPrompt == "" {
+			fmt.Fprintln(os.Stderr, "prompt file is empty")
+			os.Exit(1)
+		}
 	}
 
 	client := &http.Client{Timeout: *timeout}
@@ -58,9 +77,9 @@ func main() {
 
 	switch normalizeProvider(*provider) {
 	case "ollama":
-		responseText, err = callOllama(client, *baseURL, *model, *prompt)
+		responseText, err = callOllama(client, *baseURL, *model, finalPrompt)
 	case "openai-compatible":
-		responseText, err = callOpenAICompatible(client, *baseURL, *model, *prompt)
+		responseText, err = callOpenAICompatible(client, *baseURL, *model, finalPrompt)
 	default:
 		err = fmt.Errorf("unsupported provider %q (supported: %s)", *provider, supportedProviders())
 	}
