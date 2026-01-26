@@ -33,6 +33,7 @@ List of guides detailing how to do different things with Toolbox.
 - [Deploy to Kubernetes](https://Zimmyie.github.io/genai-toolbox/how-to/deploy_gke/): How to set up and configure Toolbox to deploy on Kubernetes with Google Kubernetes Engine (GKE).
 - [Deploy using Docker Compose](https://Zimmyie.github.io/genai-toolbox/how-to/deploy_docker/): How to deploy Toolbox using Docker Compose.
 - [Export Telemetry](https://Zimmyie.github.io/genai-toolbox/how-to/export_telemetry/): How to set up and configure Toolbox to use the Otel Collector.
+- [Narrative prompt tuning](https://Zimmyie.github.io/genai-toolbox/how-to/narrative_prompting/): A system prompt template for high-energy, lore-aware creative writing support.
 
 ### Resources
 

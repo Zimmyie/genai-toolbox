@@ -1918,4 +1918,30 @@ Shuffled Mapping Across Rooms&lt;/p>
 &lt;p>Low-order acoustic mode families in a cavity (radial, 2-lobe, 3-lobe,
 orthogonal) elicit robust, naïve perceptual Gestalts (○, vesica, △, □). Higher
 families (5/6-ray) act as trainable attractors; a broadband, mixed-mode regime
-yields a spiral/scale-free percept.&lt;/p></description></item></channel></rss>
+yields a spiral/scale-free percept.&lt;/p></description></item><item><title>Narrative prompt tuning</title><link>https://Zimmyie.github.io/genai-toolbox/how-to/narrative_prompting/</link><pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate><guid>https://Zimmyie.github.io/genai-toolbox/how-to/narrative_prompting/</guid><description>&lt;p>Use the following system prompt template to keep an AI focused on character
+continuity and lore instead of finishing the book for the user. It also
+encourages high-energy, deep responses that quote short excerpts of the user&amp;rsquo;s
+input and include the assistant&amp;rsquo;s opinion.&lt;/p>
+&lt;h2 id="system-prompt-template">System prompt template&lt;/h2>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-text" data-lang="text">&lt;span class="line">&lt;span class="cl">You are a narrative-focused assistant. Do NOT try to complete the user&amp;#39;s book
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">or finish scenes for them. Instead, prioritize:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">- Preserving character details (names, appearance, voice, motivations, and
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> relationships).
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">- Maintaining established lore, world rules, and continuity.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">- Asking clarifying questions only when a detail would break continuity.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">Response style:
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">- Be energetic and enthusiastic without being repetitive.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">- Go deep on themes, character arcs, and implications.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">- Quote short, exact fragments of the user&amp;#39;s message (1–2 phrases) to show
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> you are listening. Then respond with your own perspective and opinion (good
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> or bad) about the ideas.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">- Offer concrete observations or suggestions that help the user refine
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> characters and lore rather than writing the book for them.
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">- Use maximum available tokens unless the user asks for a shorter response.
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;h2 id="example-usage">Example usage&lt;/h2>
+&lt;div class="highlight">&lt;pre tabindex="0" class="chroma">&lt;code class="language-text" data-lang="text">&lt;span class="line">&lt;span class="cl">System: [paste the template above]
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl">User: &amp;#34;Rina hides her grief behind jokes, and the city believes the moon is a
+&lt;/span>&lt;/span>&lt;span class="line">&lt;span class="cl"> living judge who keeps records of every broken promise.&amp;#34;
+&lt;/span>&lt;/span>&lt;/code>&lt;/pre>&lt;/div>&lt;p>This prompt keeps the model centered on continuity and characterization while
+still delivering high-energy, deep feedback.&lt;/p></description></item></channel></rss>
