@@ -16,14 +16,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/render"
 	"github.com/googleapis/genai-toolbox/internal/tools"
 	"github.com/googleapis/genai-toolbox/internal/util"
+	"github.com/googleapis/genai-toolbox/internal/util/parameters"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
@@ -133,6 +136,7 @@ func toolGetHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 	ctx, span := s.instrumentation.Tracer.Start(r.Context(), "toolbox/server/tool/invoke")
 	r = r.WithContext(ctx)
+	ctx = util.WithLogger(r.Context(), s.logger)
 
 	toolName := chi.URLParam(r, "toolName")
 	s.logger.DebugContext(ctx, fmt.Sprintf("tool name: %s", toolName))
@@ -162,6 +166,27 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		s.logger.DebugContext(ctx, err.Error())
 		_ = render.Render(w, r, newErrResponse(err, http.StatusNotFound))
 		return
+	}
+
+	// Extract OAuth access token from the "Authorization" header (currently for
+	// BigQuery end-user credentials usage only)
+	accessToken := tools.AccessToken(r.Header.Get("Authorization"))
+
+	// Check if this specific tool requires the standard authorization header
+	clientAuth, err := tool.RequiresClientAuthorization(s.ResourceMgr)
+	if err != nil {
+		errMsg := fmt.Errorf("error during invocation: %w", err)
+		s.logger.DebugContext(ctx, errMsg.Error())
+		_ = render.Render(w, r, newErrResponse(errMsg, http.StatusNotFound))
+		return
+	}
+	if clientAuth {
+		if accessToken == "" {
+			err = fmt.Errorf("tool requires client authorization but access token is missing from the request header")
+			s.logger.DebugContext(ctx, err.Error())
+			_ = render.Render(w, r, newErrResponse(err, http.StatusUnauthorized))
+			return
+		}
 	}
 
 	// Tool authentication
@@ -207,8 +232,14 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	params, err := tool.ParseParams(data, claimsFromAuth)
+	params, err := parameters.ParseParams(tool.GetParameters(), data, claimsFromAuth)
 	if err != nil {
+		// If auth error, return 401
+		if errors.Is(err, util.ErrUnauthorized) {
+			s.logger.DebugContext(ctx, fmt.Sprintf("error parsing authenticated parameters from ID token: %s", err))
+			_ = render.Render(w, r, newErrResponse(err, http.StatusUnauthorized))
+			return
+		}
 		err = fmt.Errorf("provided parameters were invalid: %w", err)
 		s.logger.DebugContext(ctx, err.Error())
 		_ = render.Render(w, r, newErrResponse(err, http.StatusBadRequest))
@@ -216,8 +247,42 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 	}
 	s.logger.DebugContext(ctx, fmt.Sprintf("invocation params: %s", params))
 
-	res, err := tool.Invoke(ctx, params)
+	params, err = tool.EmbedParams(ctx, params, s.ResourceMgr.GetEmbeddingModelMap())
 	if err != nil {
+		err = fmt.Errorf("error embedding parameters: %w", err)
+		s.logger.DebugContext(ctx, err.Error())
+		_ = render.Render(w, r, newErrResponse(err, http.StatusBadRequest))
+		return
+	}
+
+	res, err := tool.Invoke(ctx, s.ResourceMgr, params, accessToken)
+
+	// Determine what error to return to the users.
+	if err != nil {
+		errStr := err.Error()
+		var statusCode int
+
+		// Upstream API auth error propagation
+		switch {
+		case strings.Contains(errStr, "Error 401"):
+			statusCode = http.StatusUnauthorized
+		case strings.Contains(errStr, "Error 403"):
+			statusCode = http.StatusForbidden
+		}
+
+		if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
+			if clientAuth {
+				// Propagate the original 401/403 error.
+				s.logger.DebugContext(ctx, fmt.Sprintf("error invoking tool. Client credentials lack authorization to the source: %v", err))
+				_ = render.Render(w, r, newErrResponse(err, statusCode))
+				return
+			}
+			// ADC lacking permission or credentials configuration error.
+			internalErr := fmt.Errorf("unexpected auth error occured during Tool invocation: %w", err)
+			s.logger.ErrorContext(ctx, internalErr.Error())
+			_ = render.Render(w, r, newErrResponse(internalErr, http.StatusInternalServerError))
+			return
+		}
 		err = fmt.Errorf("error while invoking tool: %w", err)
 		s.logger.DebugContext(ctx, err.Error())
 		_ = render.Render(w, r, newErrResponse(err, http.StatusBadRequest))

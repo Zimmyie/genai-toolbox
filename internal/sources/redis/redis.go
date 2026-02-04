@@ -24,14 +24,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const SourceKind string = "redis"
+const SourceType string = "redis"
 
 // validate interface
 var _ sources.SourceConfig = Config{}
 
 func init() {
-	if !sources.Register(SourceKind, newConfig) {
-		panic(fmt.Sprintf("source kind %q already registered", SourceKind))
+	if !sources.Register(SourceType, newConfig) {
+		panic(fmt.Sprintf("source type %q already registered", SourceType))
 	}
 }
 
@@ -45,7 +45,7 @@ func newConfig(ctx context.Context, name string, decoder *yaml.Decoder) (sources
 
 type Config struct {
 	Name           string   `yaml:"name" validate:"required"`
-	Kind           string   `yaml:"kind" validate:"required"`
+	Type           string   `yaml:"type" validate:"required"`
 	Address        []string `yaml:"address" validate:"required"`
 	Username       string   `yaml:"username"`
 	Password       string   `yaml:"password"`
@@ -54,8 +54,8 @@ type Config struct {
 	ClusterEnabled bool     `yaml:"clusterEnabled"`
 }
 
-func (r Config) SourceConfigKind() string {
-	return SourceKind
+func (r Config) SourceConfigType() string {
+	return SourceType
 }
 
 // RedisClient is an interface for `redis.Client` and `redis.ClusterClient
@@ -72,8 +72,7 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 		return nil, fmt.Errorf("error initializing Redis client: %s", err)
 	}
 	s := &Source{
-		Name:   r.Name,
-		Kind:   SourceKind,
+		Config: r,
 		Client: client,
 	}
 	return s, nil
@@ -138,15 +137,65 @@ func initRedisClient(ctx context.Context, r Config) (RedisClient, error) {
 var _ sources.Source = &Source{}
 
 type Source struct {
-	Name   string `yaml:"name"`
-	Kind   string `yaml:"kind"`
+	Config
 	Client RedisClient
 }
 
-func (s *Source) SourceKind() string {
-	return SourceKind
+func (s *Source) SourceType() string {
+	return SourceType
+}
+
+func (s *Source) ToConfig() sources.SourceConfig {
+	return s.Config
 }
 
 func (s *Source) RedisClient() RedisClient {
 	return s.Client
+}
+
+func (s *Source) RunCommand(ctx context.Context, cmds [][]any) (any, error) {
+	// Execute commands
+	responses := make([]*redis.Cmd, len(cmds))
+	for i, cmd := range cmds {
+		responses[i] = s.RedisClient().Do(ctx, cmd...)
+	}
+	// Parse responses
+	out := make([]any, len(cmds))
+	for i, resp := range responses {
+		if err := resp.Err(); err != nil {
+			// Add error from each command to `errSum`
+			errString := fmt.Sprintf("error from executing command at index %d: %s", i, err)
+			out[i] = errString
+			continue
+		}
+		val, err := resp.Result()
+		if err != nil {
+			return nil, fmt.Errorf("error getting result: %s", err)
+		}
+		out[i] = convertRedisResult(val)
+	}
+
+	return out, nil
+}
+
+// convertRedisResult recursively converts redis results (map[any]any) to be
+// JSON-marshallable (map[string]any).
+// It converts map[any]any to map[string]any and handles nested structures.
+func convertRedisResult(v any) any {
+	switch val := v.(type) {
+	case map[any]any:
+		m := make(map[string]any)
+		for k, v := range val {
+			m[fmt.Sprint(k)] = convertRedisResult(v)
+		}
+		return m
+	case []any:
+		s := make([]any, len(val))
+		for i, v := range val {
+			s[i] = convertRedisResult(v)
+		}
+		return s
+	default:
+		return v
+	}
 }

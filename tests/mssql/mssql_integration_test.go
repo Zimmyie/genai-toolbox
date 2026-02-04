@@ -28,11 +28,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/googleapis/genai-toolbox/internal/testutils"
 	"github.com/googleapis/genai-toolbox/tests"
+	_ "github.com/microsoft/go-mssqldb"
 )
 
 var (
-	MSSQLSourceKind = "mssql"
-	MSSQLToolKind   = "mssql-sql"
+	MSSQLSourceType = "mssql"
+	MSSQLToolType   = "mssql-sql"
 	MSSQLDatabase   = os.Getenv("MSSQL_DATABASE")
 	MSSQLHost       = os.Getenv("MSSQL_HOST")
 	MSSQLPort       = os.Getenv("MSSQL_PORT")
@@ -55,7 +56,7 @@ func getMsSQLVars(t *testing.T) map[string]any {
 	}
 
 	return map[string]any{
-		"kind":     MSSQLSourceKind,
+		"type":     MSSQLSourceType,
 		"host":     MSSQLHost,
 		"port":     MSSQLPort,
 		"database": MSSQLDatabase,
@@ -96,13 +97,16 @@ func TestMSSQLToolEndpoints(t *testing.T) {
 		t.Fatalf("unable to create SQL Server connection pool: %s", err)
 	}
 
+	// cleanup test environment
+	tests.CleanupMSSQLTables(t, ctx, pool)
+
 	// create table name with UUID
 	tableNameParam := "param_table_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	tableNameAuth := "auth_table_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	tableNameTemplateParam := "template_param_table_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	// set up data for param tool
-	createParamTableStmt, insertParamTableStmt, paramToolStmt, paramToolStmt2, arrayToolStmt, paramTestParams := tests.GetMSSQLParamToolInfo(tableNameParam)
+	createParamTableStmt, insertParamTableStmt, paramToolStmt, idParamToolStmt, nameParamToolStmt, arrayToolStmt, paramTestParams := tests.GetMSSQLParamToolInfo(tableNameParam)
 	teardownTable1 := tests.SetupMsSQLTable(t, ctx, pool, createParamTableStmt, insertParamTableStmt, tableNameParam, paramTestParams)
 	defer teardownTable1(t)
 
@@ -112,10 +116,11 @@ func TestMSSQLToolEndpoints(t *testing.T) {
 	defer teardownTable2(t)
 
 	// Write config into a file and pass it to command
-	toolsFile := tests.GetToolsConfig(sourceConfig, MSSQLToolKind, paramToolStmt, paramToolStmt2, arrayToolStmt, authToolStmt)
+	toolsFile := tests.GetToolsConfig(sourceConfig, MSSQLToolType, paramToolStmt, idParamToolStmt, nameParamToolStmt, arrayToolStmt, authToolStmt)
 	toolsFile = tests.AddMSSQLExecuteSqlConfig(t, toolsFile)
 	tmplSelectCombined, tmplSelectFilterCombined := tests.GetMSSQLTmplToolStatement()
-	toolsFile = tests.AddTemplateParamConfig(t, toolsFile, MSSQLToolKind, tmplSelectCombined, tmplSelectFilterCombined, "")
+	toolsFile = tests.AddTemplateParamConfig(t, toolsFile, MSSQLToolType, tmplSelectCombined, tmplSelectFilterCombined, "")
+	toolsFile = tests.AddMSSQLPrebuiltToolConfig(t, toolsFile)
 
 	cmd, cleanup, err := tests.StartCmd(ctx, toolsFile, args...)
 	if err != nil {
@@ -131,12 +136,16 @@ func TestMSSQLToolEndpoints(t *testing.T) {
 		t.Fatalf("toolbox didn't start successfully: %s", err)
 	}
 
-	tests.RunToolGetTest(t)
+	// Get configs for tests
+	select1Want, mcpMyFailToolWant, createTableStatement, mcpSelect1Want := tests.GetMSSQLWants()
 
-	select1Want, failInvocationWant, createTableStatement := tests.GetMSSQLWants()
-	invokeParamWant, invokeParamWantNull, mcpInvokeParamWant := tests.GetNonSpannerInvokeParamWant()
-	tests.RunToolInvokeTest(t, select1Want, invokeParamWant, invokeParamWantNull, false)
+	// Run tests
+	tests.RunToolGetTest(t)
+	tests.RunToolInvokeTest(t, select1Want, tests.DisableArrayTest())
+	tests.RunMCPToolCallMethod(t, mcpMyFailToolWant, mcpSelect1Want)
 	tests.RunExecuteSqlToolInvokeTest(t, createTableStatement, select1Want)
-	tests.RunMCPToolCallMethod(t, mcpInvokeParamWant, failInvocationWant)
-	tests.RunToolInvokeWithTemplateParameters(t, tableNameTemplateParam, tests.NewTemplateParameterTestConfig())
+	tests.RunToolInvokeWithTemplateParameters(t, tableNameTemplateParam)
+
+	// Run specific MSSQL tool tests
+	tests.RunMSSQLListTablesTest(t, tableNameParam, tableNameAuth)
 }

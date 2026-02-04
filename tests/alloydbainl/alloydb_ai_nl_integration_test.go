@@ -33,8 +33,8 @@ import (
 )
 
 var (
-	AlloyDBAINLSourceKind = "alloydb-postgres"
-	AlloyDBAINLToolKind   = "alloydb-ai-nl"
+	AlloyDBAINLSourceType = "alloydb-postgres"
+	AlloyDBAINLToolType   = "alloydb-ai-nl"
 	AlloyDBAINLProject    = os.Getenv("ALLOYDB_AI_NL_PROJECT")
 	AlloyDBAINLRegion     = os.Getenv("ALLOYDB_AI_NL_REGION")
 	AlloyDBAINLCluster    = os.Getenv("ALLOYDB_AI_NL_CLUSTER")
@@ -62,7 +62,7 @@ func getAlloyDBAINLVars(t *testing.T) map[string]any {
 		t.Fatal("'ALLOYDB_AI_NL_PASS' not set")
 	}
 	return map[string]any{
-		"kind":     AlloyDBAINLSourceKind,
+		"type":     AlloyDBAINLSourceType,
 		"project":  AlloyDBAINLProject,
 		"cluster":  AlloyDBAINLCluster,
 		"instance": AlloyDBAINLInstance,
@@ -177,7 +177,7 @@ func runAINLToolInvokeTest(t *testing.T) {
 			name:          "invoke my-simple-tool",
 			api:           "http://127.0.0.1:5000/api/tool/my-simple-tool/invoke",
 			requestHeader: map[string]string{},
-			requestBody:   bytes.NewBuffer([]byte(`{"question": "return 1"}`)),
+			requestBody:   bytes.NewBuffer([]byte(`{"question": "return the number 1"}`)),
 			want:          "[{\"execute_nl_query\":{\"?column?\":1}}]",
 			isErr:         false,
 		},
@@ -200,21 +200,21 @@ func runAINLToolInvokeTest(t *testing.T) {
 			name:          "Invoke my-auth-tool with invalid auth token",
 			api:           "http://127.0.0.1:5000/api/tool/my-auth-tool/invoke",
 			requestHeader: map[string]string{"my-google-auth_token": "INVALID_TOKEN"},
-			requestBody:   bytes.NewBuffer([]byte(`{"question": "return 1"}`)),
+			requestBody:   bytes.NewBuffer([]byte(`{"question": "return the number 1"}`)),
 			isErr:         true,
 		},
 		{
 			name:          "Invoke my-auth-tool without auth token",
 			api:           "http://127.0.0.1:5000/api/tool/my-auth-tool/invoke",
 			requestHeader: map[string]string{},
-			requestBody:   bytes.NewBuffer([]byte(`{"question": "return 1"}`)),
+			requestBody:   bytes.NewBuffer([]byte(`{"question": "return the number 1"}`)),
 			isErr:         true,
 		},
 		{
 			name:          "Invoke my-auth-required-tool with auth token",
 			api:           "http://127.0.0.1:5000/api/tool/my-auth-required-tool/invoke",
 			requestHeader: map[string]string{"my-google-auth_token": idToken},
-			requestBody:   bytes.NewBuffer([]byte(`{"question": "return 1"}`)),
+			requestBody:   bytes.NewBuffer([]byte(`{"question": "return the number 1"}`)),
 			isErr:         false,
 			want:          "[{\"execute_nl_query\":{\"?column?\":1}}]",
 		},
@@ -222,14 +222,14 @@ func runAINLToolInvokeTest(t *testing.T) {
 			name:          "Invoke my-auth-required-tool with invalid auth token",
 			api:           "http://127.0.0.1:5000/api/tool/my-auth-required-tool/invoke",
 			requestHeader: map[string]string{"my-google-auth_token": "INVALID_TOKEN"},
-			requestBody:   bytes.NewBuffer([]byte(`{"question": "return 1"}`)),
+			requestBody:   bytes.NewBuffer([]byte(`{"question": "return the number 1"}`)),
 			isErr:         true,
 		},
 		{
 			name:          "Invoke my-auth-required-tool without auth token",
 			api:           "http://127.0.0.1:5000/api/tool/my-auth-tool/invoke",
 			requestHeader: map[string]string{},
-			requestBody:   bytes.NewBuffer([]byte(`{"question": "return 1"}`)),
+			requestBody:   bytes.NewBuffer([]byte(`{"question": "return the number 1"}`)),
 			isErr:         true,
 		},
 	}
@@ -285,19 +285,19 @@ func getAINLToolsConfig(sourceConfig map[string]any) map[string]any {
 		},
 		"authServices": map[string]any{
 			"my-google-auth": map[string]any{
-				"kind":     "google",
+				"type":     "google",
 				"clientId": tests.ClientId,
 			},
 		},
 		"tools": map[string]any{
 			"my-simple-tool": map[string]any{
-				"kind":        AlloyDBAINLToolKind,
+				"type":        AlloyDBAINLToolType,
 				"source":      "my-instance",
 				"description": "Simple tool to test end to end functionality.",
 				"nlConfig":    "my_nl_config",
 			},
 			"my-auth-tool": map[string]any{
-				"kind":        AlloyDBAINLToolKind,
+				"type":        AlloyDBAINLToolType,
 				"source":      "my-instance",
 				"description": "Tool to test authenticated parameters.",
 				"nlConfig":    "my_nl_config",
@@ -316,7 +316,7 @@ func getAINLToolsConfig(sourceConfig map[string]any) map[string]any {
 				},
 			},
 			"my-auth-required-tool": map[string]any{
-				"kind":        AlloyDBAINLToolKind,
+				"type":        AlloyDBAINLToolType,
 				"source":      "my-instance",
 				"description": "Tool to test auth required invocation.",
 				"nlConfig":    "my_nl_config",
@@ -358,7 +358,7 @@ func runAINLMCPToolCallMethod(t *testing.T) {
 				Params: map[string]any{
 					"name": "my-simple-tool",
 					"arguments": map[string]any{
-						"question": "return 1",
+						"question": "return the number 1",
 					},
 				},
 			},

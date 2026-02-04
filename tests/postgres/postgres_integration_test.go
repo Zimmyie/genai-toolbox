@@ -31,8 +31,8 @@ import (
 )
 
 var (
-	PostgresSourceKind = "postgres"
-	PostgresToolKind   = "postgres-sql"
+	PostgresSourceType = "postgres"
+	PostgresToolType   = "postgres-sql"
 	PostgresDatabase   = os.Getenv("POSTGRES_DATABASE")
 	PostgresHost       = os.Getenv("POSTGRES_HOST")
 	PostgresPort       = os.Getenv("POSTGRES_PORT")
@@ -55,7 +55,7 @@ func getPostgresVars(t *testing.T) map[string]any {
 	}
 
 	return map[string]any{
-		"kind":     PostgresSourceKind,
+		"type":     PostgresSourceType,
 		"host":     PostgresHost,
 		"port":     PostgresPort,
 		"database": PostgresDatabase,
@@ -93,13 +93,16 @@ func TestPostgres(t *testing.T) {
 		t.Fatalf("unable to create postgres connection pool: %s", err)
 	}
 
+	// cleanup test environment
+	tests.CleanupPostgresTables(t, ctx, pool)
+
 	// create table name with UUID
 	tableNameParam := "param_table_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	tableNameAuth := "auth_table_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 	tableNameTemplateParam := "template_param_table_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 
 	// set up data for param tool
-	createParamTableStmt, insertParamTableStmt, paramToolStmt, paramToolStmt2, arrayToolStmt, paramTestParams := tests.GetPostgresSQLParamToolInfo(tableNameParam)
+	createParamTableStmt, insertParamTableStmt, paramToolStmt, idParamToolStmt, nameParamToolStmt, arrayToolStmt, paramTestParams := tests.GetPostgresSQLParamToolInfo(tableNameParam)
 	teardownTable1 := tests.SetupPostgresSQLTable(t, ctx, pool, createParamTableStmt, insertParamTableStmt, tableNameParam, paramTestParams)
 	defer teardownTable1(t)
 
@@ -108,11 +111,20 @@ func TestPostgres(t *testing.T) {
 	teardownTable2 := tests.SetupPostgresSQLTable(t, ctx, pool, createAuthTableStmt, insertAuthTableStmt, tableNameAuth, authTestParams)
 	defer teardownTable2(t)
 
+	// Set up table for semantic search
+	vectorTableName, tearDownVectorTable := tests.SetupPostgresVectorTable(t, ctx, pool)
+	defer tearDownVectorTable(t)
+
 	// Write config into a file and pass it to command
-	toolsFile := tests.GetToolsConfig(sourceConfig, PostgresToolKind, paramToolStmt, paramToolStmt2, arrayToolStmt, authToolStmt)
-	toolsFile = tests.AddPgExecuteSqlConfig(t, toolsFile)
+	toolsFile := tests.GetToolsConfig(sourceConfig, PostgresToolType, paramToolStmt, idParamToolStmt, nameParamToolStmt, arrayToolStmt, authToolStmt)
+	toolsFile = tests.AddExecuteSqlConfig(t, toolsFile, "postgres-execute-sql")
 	tmplSelectCombined, tmplSelectFilterCombined := tests.GetPostgresSQLTmplToolStatement()
-	toolsFile = tests.AddTemplateParamConfig(t, toolsFile, PostgresToolKind, tmplSelectCombined, tmplSelectFilterCombined, "")
+	toolsFile = tests.AddTemplateParamConfig(t, toolsFile, PostgresToolType, tmplSelectCombined, tmplSelectFilterCombined, "")
+	toolsFile = tests.AddPostgresPrebuiltConfig(t, toolsFile)
+
+	// Add semantic search tool config
+	insertStmt, searchStmt := tests.GetPostgresVectorSearchStmts(vectorTableName)
+	toolsFile = tests.AddSemanticSearchConfig(t, toolsFile, PostgresToolType, insertStmt, searchStmt)
 
 	cmd, cleanup, err := tests.StartCmd(ctx, toolsFile, args...)
 	if err != nil {
@@ -128,12 +140,38 @@ func TestPostgres(t *testing.T) {
 		t.Fatalf("toolbox didn't start successfully: %s", err)
 	}
 
-	tests.RunToolGetTest(t)
+	// Get configs for tests
+	select1Want, mcpMyFailToolWant, createTableStatement, mcpSelect1Want := tests.GetPostgresWants()
 
-	select1Want, failInvocationWant, createTableStatement := tests.GetPostgresWants()
-	invokeParamWant, invokeParamWantNull, mcpInvokeParamWant := tests.GetNonSpannerInvokeParamWant()
-	tests.RunToolInvokeTest(t, select1Want, invokeParamWant, invokeParamWantNull, true)
+	// Run tests
+	tests.RunToolGetTest(t)
+	tests.RunToolInvokeTest(t, select1Want)
+	tests.RunMCPToolCallMethod(t, mcpMyFailToolWant, mcpSelect1Want)
 	tests.RunExecuteSqlToolInvokeTest(t, createTableStatement, select1Want)
-	tests.RunMCPToolCallMethod(t, mcpInvokeParamWant, failInvocationWant)
-	tests.RunToolInvokeWithTemplateParameters(t, tableNameTemplateParam, tests.NewTemplateParameterTestConfig())
+	tests.RunToolInvokeWithTemplateParameters(t, tableNameTemplateParam)
+
+	// Run Postgres prebuilt tool tests
+	tests.RunPostgresListTablesTest(t, tableNameParam, tableNameAuth, PostgresUser)
+	tests.RunPostgresListViewsTest(t, ctx, pool)
+	tests.RunPostgresListSchemasTest(t, ctx, pool)
+	tests.RunPostgresListActiveQueriesTest(t, ctx, pool)
+	tests.RunPostgresListAvailableExtensionsTest(t)
+	tests.RunPostgresListInstalledExtensionsTest(t)
+	tests.RunPostgresDatabaseOverviewTest(t, ctx, pool)
+	tests.RunPostgresListTriggersTest(t, ctx, pool)
+	tests.RunPostgresListIndexesTest(t, ctx, pool)
+	tests.RunPostgresListSequencesTest(t, ctx, pool)
+	tests.RunPostgresLongRunningTransactionsTest(t, ctx, pool)
+	tests.RunPostgresListLocksTest(t, ctx, pool)
+	tests.RunPostgresReplicationStatsTest(t, ctx, pool)
+	tests.RunPostgresListQueryStatsTest(t, ctx, pool)
+	tests.RunPostgresGetColumnCardinalityTest(t, ctx, pool)
+	tests.RunPostgresListTableStatsTest(t, ctx, pool)
+	tests.RunPostgresListPublicationTablesTest(t, ctx, pool)
+	tests.RunPostgresListTableSpacesTest(t)
+	tests.RunPostgresListPgSettingsTest(t, ctx, pool)
+	tests.RunPostgresListDatabaseStatsTest(t, ctx, pool)
+	tests.RunPostgresListRolesTest(t, ctx, pool)
+	tests.RunPostgresListStoredProcedureTest(t, ctx, pool)
+	tests.RunSemanticSearchToolInvokeTest(t, "null", "", "The quick brown fox")
 }

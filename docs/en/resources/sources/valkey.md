@@ -17,21 +17,26 @@ sets, sorted sets with range queries, bitmaps, hyperloglogs, and geospatial
 indexes with radius queries.
 
 If you're new to Valkey, you can find installation and getting started guides on
-the [official Valkey website](https://valkey.io/docs/getting-started/).
+the [official Valkey website](https://valkey.io/topics/quickstart/).
+
+## Available Tools
+
+- [`valkey`](../tools/valkey/valkey.md)  
+  Issue Valkey (Redis-compatible) commands.
 
 ## Example
 
 ```yaml
-sources:
-    my-valkey-instance:
-     kind: valkey
-     address:
-       - 127.0.0.1
-     username: ${YOUR_USERNAME}
-     password: ${YOUR_PASSWORD}
-     # database: 0
-     # useGCPIAM: false
-     # disableCache: false
+kind: sources
+name: my-valkey-instance
+type: valkey
+address:
+  - 127.0.0.1:6379
+username: ${YOUR_USERNAME}
+password: ${YOUR_PASSWORD}
+# database: 0
+# useGCPIAM: false
+# disableCache: false
 ```
 
 {{< notice tip >}}
@@ -46,12 +51,12 @@ authentication. Grant your account the required [IAM role][iam] and set
 `useGCPIAM` to `true`:
 
 ```yaml
-sources:
-    my-valkey-instance:
-     kind: valkey
-     address:
-       - 127.0.0.1
-     useGCPIAM: true
+kind: sources
+name: my-valkey-instance
+type: valkey
+address:
+  - 127.0.0.1:6379
+useGCPIAM: true
 ```
 
 [iam]: https://cloud.google.com/memorystore/docs/valkey/about-iam-auth
@@ -60,7 +65,7 @@ sources:
 
 | **field**    | **type** | **required** | **description**                                                                                                                  |
 |--------------|:--------:|:------------:|----------------------------------------------------------------------------------------------------------------------------------|
-| kind         |  string  |     true     | Must be "valkey".                                                                                                                |
+| type         |  string  |     true     | Must be "valkey".                                                                                                                |
 | address      | []string |     true     | Endpoints for the Valkey instance to connect to.                                                                                 |
 | username     |  string  |    false     | If you are using a non-default user, specify the user name here. If you are using Memorystore for Valkey, leave this field blank |
 | password     |  string  |    false     | Password for the Valkey instance                                                                                                 |

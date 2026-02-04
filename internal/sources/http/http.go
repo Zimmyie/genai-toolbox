@@ -16,7 +16,9 @@ package http
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -27,14 +29,14 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const SourceKind string = "http"
+const SourceType string = "http"
 
 // validate interface
 var _ sources.SourceConfig = Config{}
 
 func init() {
-	if !sources.Register(SourceKind, newConfig) {
-		panic(fmt.Sprintf("source kind %q already registered", SourceKind))
+	if !sources.Register(SourceType, newConfig) {
+		panic(fmt.Sprintf("source type %q already registered", SourceType))
 	}
 }
 
@@ -48,7 +50,7 @@ func newConfig(ctx context.Context, name string, decoder *yaml.Decoder) (sources
 
 type Config struct {
 	Name                   string            `yaml:"name" validate:"required"`
-	Kind                   string            `yaml:"kind" validate:"required"`
+	Type                   string            `yaml:"type" validate:"required"`
 	BaseURL                string            `yaml:"baseUrl"`
 	Timeout                string            `yaml:"timeout"`
 	DefaultHeaders         map[string]string `yaml:"headers"`
@@ -56,8 +58,8 @@ type Config struct {
 	DisableSslVerification bool              `yaml:"disableSslVerification"`
 }
 
-func (r Config) SourceConfigKind() string {
-	return SourceKind
+func (r Config) SourceConfigType() string {
+	return SourceType
 }
 
 // Initialize initializes an HTTP Source instance.
@@ -93,13 +95,21 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 		return nil, fmt.Errorf("failed to parse BaseUrl %v", err)
 	}
 
+	ua, err := util.UserAgentFromContext(ctx)
+	if err != nil {
+		fmt.Printf("Error in User Agent retrieval: %s", err)
+	}
+	if r.DefaultHeaders == nil {
+		r.DefaultHeaders = make(map[string]string)
+	}
+	if existingUA, ok := r.DefaultHeaders["User-Agent"]; ok {
+		ua = ua + " " + existingUA
+	}
+	r.DefaultHeaders["User-Agent"] = ua
+
 	s := &Source{
-		Name:           r.Name,
-		Kind:           SourceKind,
-		BaseURL:        r.BaseURL,
-		DefaultHeaders: r.DefaultHeaders,
-		QueryParams:    r.QueryParams,
-		Client:         &client,
+		Config: r,
+		client: &client,
 	}
 	return s, nil
 
@@ -108,14 +118,55 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 var _ sources.Source = &Source{}
 
 type Source struct {
-	Name           string            `yaml:"name"`
-	Kind           string            `yaml:"kind"`
-	BaseURL        string            `yaml:"baseUrl"`
-	DefaultHeaders map[string]string `yaml:"headers"`
-	QueryParams    map[string]string `yaml:"queryParams"`
-	Client         *http.Client
+	Config
+	client *http.Client
 }
 
-func (s *Source) SourceKind() string {
-	return SourceKind
+func (s *Source) SourceType() string {
+	return SourceType
+}
+
+func (s *Source) ToConfig() sources.SourceConfig {
+	return s.Config
+}
+
+func (s *Source) HttpDefaultHeaders() map[string]string {
+	return s.DefaultHeaders
+}
+
+func (s *Source) HttpBaseURL() string {
+	return s.BaseURL
+}
+
+func (s *Source) HttpQueryParams() map[string]string {
+	return s.QueryParams
+}
+
+func (s *Source) Client() *http.Client {
+	return s.client
+}
+
+func (s *Source) RunRequest(req *http.Request) (any, error) {
+	// Make request and fetch response
+	resp, err := s.Client().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error making HTTP request: %s", err)
+	}
+	defer resp.Body.Close()
+
+	var body []byte
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, fmt.Errorf("unexpected status code: %d, response body: %s", resp.StatusCode, string(body))
+	}
+
+	var data any
+	if err = json.Unmarshal(body, &data); err != nil {
+		// if unable to unmarshal data, return result as string.
+		return string(body), nil
+	}
+	return data, nil
 }

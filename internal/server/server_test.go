@@ -25,7 +25,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/googleapis/genai-toolbox/internal/auth"
+	"github.com/googleapis/genai-toolbox/internal/embeddingmodels"
 	"github.com/googleapis/genai-toolbox/internal/log"
+	"github.com/googleapis/genai-toolbox/internal/prompts"
 	"github.com/googleapis/genai-toolbox/internal/server"
 	"github.com/googleapis/genai-toolbox/internal/sources"
 	"github.com/googleapis/genai-toolbox/internal/sources/alloydbpg"
@@ -41,9 +43,10 @@ func TestServe(t *testing.T) {
 
 	addr, port := "127.0.0.1", 5000
 	cfg := server.ServerConfig{
-		Version: "0.0.0",
-		Address: addr,
-		Port:    port,
+		Version:      "0.0.0",
+		Address:      addr,
+		Port:         port,
+		AllowedHosts: []string{"*"},
 	}
 
 	otelShutdown, err := telemetry.SetupOTel(ctx, "0.0.0", "", false, "toolbox")
@@ -136,18 +139,33 @@ func TestUpdateServer(t *testing.T) {
 
 	newSources := map[string]sources.Source{
 		"example-source": &alloydbpg.Source{
-			Name: "example-alloydb-source",
-			Kind: "alloydb-postgres",
+			Config: alloydbpg.Config{
+				Name: "example-alloydb-source",
+				Type: "alloydb-postgres",
+			},
 		},
 	}
 	newAuth := map[string]auth.AuthService{"example-auth": nil}
+	newEmbeddingModels := map[string]embeddingmodels.EmbeddingModel{"example-model": nil}
 	newTools := map[string]tools.Tool{"example-tool": nil}
 	newToolsets := map[string]tools.Toolset{
 		"example-toolset": {
-			Name: "example-toolset", Tools: []*tools.Tool{},
+			ToolsetConfig: tools.ToolsetConfig{
+				Name: "example-toolset",
+			},
+			Tools: []*tools.Tool{},
 		},
 	}
-	s.ResourceMgr.SetResources(newSources, newAuth, newTools, newToolsets)
+	newPrompts := map[string]prompts.Prompt{"example-prompt": nil}
+	newPromptsets := map[string]prompts.Promptset{
+		"example-promptset": {
+			PromptsetConfig: prompts.PromptsetConfig{
+				Name: "example-promptset",
+			},
+			Prompts: []*prompts.Prompt{},
+		},
+	}
+	s.ResourceMgr.SetResources(newSources, newAuth, newEmbeddingModels, newTools, newToolsets, newPrompts, newPromptsets)
 	if err != nil {
 		t.Errorf("error updating server: %s", err)
 	}
@@ -170,5 +188,74 @@ func TestUpdateServer(t *testing.T) {
 	gotToolset, _ := s.ResourceMgr.GetToolset("example-toolset")
 	if diff := cmp.Diff(gotToolset, newToolsets["example-toolset"]); diff != "" {
 		t.Errorf("error updating server, toolset (-want +got):\n%s", diff)
+	}
+
+	gotPrompt, _ := s.ResourceMgr.GetPrompt("example-prompt")
+	if diff := cmp.Diff(gotPrompt, newPrompts["example-prompt"]); diff != "" {
+		t.Errorf("error updating server, prompts (-want +got):\n%s", diff)
+	}
+
+	gotPromptset, _ := s.ResourceMgr.GetPromptset("example-promptset")
+	if diff := cmp.Diff(gotPromptset, newPromptsets["example-promptset"]); diff != "" {
+		t.Errorf("error updating server, promptset (-want +got):\n%s", diff)
+	}
+}
+
+func TestNameValidation(t *testing.T) {
+	testCases := []struct {
+		desc         string
+		resourceName string
+		errStr       string
+	}{
+		{
+			desc:         "names with 0 length",
+			resourceName: "",
+			errStr:       "resource name SHOULD be between 1 and 128 characters in length (inclusive)",
+		},
+		{
+			desc:         "names with allowed length",
+			resourceName: "foo",
+		},
+		{
+			desc:         "names with 128 length",
+			resourceName: strings.Repeat("a", 128),
+		},
+		{
+			desc:         "names with more than 128 length",
+			resourceName: strings.Repeat("a", 129),
+			errStr:       "resource name SHOULD be between 1 and 128 characters in length (inclusive)",
+		},
+		{
+			desc:         "names with space",
+			resourceName: "foo bar",
+			errStr:       "invalid character for resource name; only uppercase and lowercase ASCII letters (A-Z, a-z), digits (0-9), underscore (_), hyphen (-), and dot (.) is allowed",
+		},
+		{
+			desc:         "names with commas",
+			resourceName: "foo,bar",
+			errStr:       "invalid character for resource name; only uppercase and lowercase ASCII letters (A-Z, a-z), digits (0-9), underscore (_), hyphen (-), and dot (.) is allowed",
+		},
+		{
+			desc:         "names with other special character",
+			resourceName: "foo!",
+			errStr:       "invalid character for resource name; only uppercase and lowercase ASCII letters (A-Z, a-z), digits (0-9), underscore (_), hyphen (-), and dot (.) is allowed",
+		},
+		{
+			desc:         "names with allowed special character",
+			resourceName: "foo_.-bar6",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			err := server.NameValidation(tc.resourceName)
+			if err != nil {
+				if tc.errStr != err.Error() {
+					t.Fatalf("unexpected error: %s", err)
+				}
+			}
+			if err == nil && tc.errStr != "" {
+				t.Fatalf("expect error: %s", tc.errStr)
+			}
+		})
 	}
 }

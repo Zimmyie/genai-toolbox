@@ -23,6 +23,25 @@ the Google Cloud console][spanner-quickstart].
 [spanner-quickstart]:
     https://cloud.google.com/spanner/docs/create-query-database-console
 
+## Available Tools
+
+- [`spanner-sql`](../tools/spanner/spanner-sql.md)  
+  Execute SQL on Google Cloud Spanner.
+
+- [`spanner-execute-sql`](../tools/spanner/spanner-execute-sql.md)  
+  Run structured and parameterized queries on Spanner.
+
+- [`spanner-list-tables`](../tools/spanner/spanner-list-tables.md)  
+  Retrieve schema information about tables in a Spanner database.
+
+- [`spanner-list-graphs`](../tools/spanner/spanner-list-graphs.md)  
+  Retrieve schema information about graphs in a Spanner database.
+
+### Pre-built Configurations
+
+- [Spanner using MCP](https://googleapis.github.io/genai-toolbox/how-to/connect-ide/spanner_mcp/)  
+Connect your IDE to Spanner using Toolbox.
+
 ## Requirements
 
 ### IAM Permissions
@@ -45,20 +64,20 @@ applying IAM permissions and roles to an identity.
 ## Example
 
 ```yaml
-sources:
-    my-spanner-source:
-        kind: "spanner"
-        project: "my-project-id"
-        instance: "my-instance"
-        database: "my_db"
-        # dialect: "googlesql"
+kind: sources
+name: my-spanner-source
+type: "spanner"
+project: "my-project-id"
+instance: "my-instance"
+database: "my_db"
+# dialect: "googlesql"
 ```
 
 ## Reference
 
 | **field** | **type** | **required** | **description**                                                                                                     |
 |-----------|:--------:|:------------:|---------------------------------------------------------------------------------------------------------------------|
-| kind      |  string  |     true     | Must be "spanner".                                                                                                  |
+| type      |  string  |     true     | Must be "spanner".                                                                                                  |
 | project   |  string  |     true     | Id of the GCP project that the cluster was created in (e.g. "my-project-id").                                       |
 | instance  |  string  |     true     | Name of the Spanner instance.                                                                                       |
 | database  |  string  |     true     | Name of the database on the Spanner instance                                                                        |

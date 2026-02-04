@@ -16,6 +16,12 @@ Databases” as its initial development predated MCP, but was renamed to align
 with recently added MCP compatibility.
 {{< /notice >}}
 
+{{< notice note >}}
+This document has been updated to support the configuration file v2 format. To
+view documentation with configuration file v1 format, please navigate to the
+top-right menu and select versions v0.26.0 or older.
+{{< /notice >}}
+
 ## Why Toolbox?
 
 Toolbox helps you build Gen AI tools that let your agents access data in your
@@ -71,6 +77,22 @@ redeploying your application.
 
 ## Getting Started
 
+### Quickstart: Running Toolbox using NPX 
+
+You can run Toolbox directly with a [configuration file](../configure.md):
+
+```sh
+npx @toolbox-sdk/server --tools-file tools.yaml
+```
+
+This runs the latest version of the toolbox server with your configuration file.
+
+{{< notice note >}}
+This method should only be used for non-production use cases such as
+experimentation. For any production use-cases, please consider [Installing the
+server](#installing-the-server) and then [running it](#running-the-server).
+{{< /notice >}}
+
 ### Installing the server
 
 For the latest version, check the [releases page][releases] and use the
@@ -81,24 +103,77 @@ following instructions for your OS and CPU architecture.
 <!-- {x-release-please-start-version} -->
 {{< tabpane text=true >}}
 {{% tab header="Binary" lang="en" %}}
-
-To install Toolbox as a binary:
+{{< tabpane text=true >}}
+{{% tab header="Linux (AMD64)" lang="en" %}}
+To install Toolbox as a binary on Linux (AMD64):
 
 ```sh
 # see releases page for other versions
-export VERSION=0.9.0
-curl -O https://storage.googleapis.com/genai-toolbox/v$VERSION/linux/amd64/toolbox
+export VERSION=0.26.0
+curl -L -o toolbox https://storage.googleapis.com/genai-toolbox/v$VERSION/linux/amd64/toolbox
 chmod +x toolbox
 ```
 
+{{% /tab %}}
+{{% tab header="macOS (Apple Silicon)" lang="en" %}}
+To install Toolbox as a binary on macOS (Apple Silicon):
+
+```sh
+# see releases page for other versions
+export VERSION=0.26.0
+curl -L -o toolbox https://storage.googleapis.com/genai-toolbox/v$VERSION/darwin/arm64/toolbox
+chmod +x toolbox
+```
+
+{{% /tab %}}
+{{% tab header="macOS (Intel)" lang="en" %}}
+To install Toolbox as a binary on macOS (Intel):
+
+```sh
+# see releases page for other versions
+export VERSION=0.26.0
+curl -L -o toolbox https://storage.googleapis.com/genai-toolbox/v$VERSION/darwin/amd64/toolbox
+chmod +x toolbox
+```
+
+{{% /tab %}}
+{{% tab header="Windows (Command Prompt)" lang="en" %}}
+To install Toolbox as a binary on Windows (Command Prompt):
+
+```cmd
+:: see releases page for other versions
+set VERSION=0.26.0
+curl -o toolbox.exe "https://storage.googleapis.com/genai-toolbox/v%VERSION%/windows/amd64/toolbox.exe"
+```
+
+{{% /tab %}}
+{{% tab header="Windows (PowerShell)" lang="en" %}}
+To install Toolbox as a binary on Windows (PowerShell):
+
+```powershell
+# see releases page for other versions
+$VERSION = "0.26.0"
+curl.exe -o toolbox.exe "https://storage.googleapis.com/genai-toolbox/v$VERSION/windows/amd64/toolbox.exe"
+```
+
+{{% /tab %}}
+{{< /tabpane >}}
 {{% /tab %}}
 {{% tab header="Container image" lang="en" %}}
 You can also install Toolbox as a container:
 
 ```sh
 # see releases page for other versions
-export VERSION=0.9.0
+export VERSION=0.26.0
 docker pull us-central1-docker.pkg.dev/database-toolbox/toolbox/toolbox:$VERSION
+```
+
+{{% /tab %}}
+{{% tab header="Homebrew" lang="en" %}}
+To install Toolbox using Homebrew on macOS or Linux:
+
+```sh
+brew install mcp-toolbox
 ```
 
 {{% /tab %}}
@@ -108,7 +183,7 @@ To install from source, ensure you have the latest version of
 [Go installed](https://go.dev/doc/install), and then run the following command:
 
 ```sh
-go install github.com/googleapis/genai-toolbox@v0.9.0
+go install github.com/googleapis/genai-toolbox@v0.26.0
 ```
 
 {{% /tab %}}
@@ -123,15 +198,36 @@ execute `toolbox` to start the server:
 ```sh
 ./toolbox --tools-file "tools.yaml"
 ```
+
 {{< notice note >}}
-Toolbox enables dynamic reloading by default. To disable, use the `--disable-reload` flag.
+Toolbox enables dynamic reloading by default. To disable, use the
+`--disable-reload` flag.
 {{< /notice >}}
+
+#### Launching Toolbox UI
+
+To launch Toolbox's interactive UI, use the `--ui` flag. This allows you to test
+tools and toolsets with features such as authorized parameters. To learn more,
+visit [Toolbox UI](../../how-to/toolbox-ui/index.md).
+
+```sh
+./toolbox --ui
+```
+
+#### Homebrew Users
+
+If you installed Toolbox using Homebrew, the `toolbox` binary is available in
+your system path. You can start the server with the same command:
+
+```sh
+toolbox --tools-file "tools.yaml"
+```
 
 You can use `toolbox help` for a full list of flags! To stop the server, send a
 terminate signal (`ctrl+c` on most platforms).
 
 For more detailed documentation on deploying to different environments, check
-out the resources in the [How-to section](../../how-to/_index.md)
+out the resources in the [How-to section](../../how-to/)
 
 ### Integrating your application
 
@@ -139,6 +235,7 @@ Once your server is up and running, you can load the tools into your
 application. See below the list of Client SDKs for using various frameworks:
 
 #### Python
+
 {{< tabpane text=true persist=header >}}
 {{% tab header="Core" lang="en" %}}
 
@@ -151,14 +248,15 @@ from toolbox_core import ToolboxClient
 
 # update the url to point to your server
 
-async with ToolboxClient("<http://127.0.0.1:5000>") as client:
+async with ToolboxClient("http://127.0.0.1:5000") as client:
 
     # these tools can be passed to your application!
     tools = await client.load_toolset("toolset_name")
 {{< /highlight >}}
 
 For more detailed instructions on using the Toolbox Core SDK, see the
-[project's README](https://github.com/googleapis/mcp-toolbox-sdk-python/blob/main/packages/toolbox-core/README.md).
+[project's
+README](https://github.com/googleapis/mcp-toolbox-sdk-python/blob/main/packages/toolbox-core/README.md).
 
 {{% /tab %}}
 {{% tab header="LangChain" lang="en" %}}
@@ -172,14 +270,15 @@ from toolbox_langchain import ToolboxClient
 
 # update the url to point to your server
 
-async with ToolboxClient("<http://127.0.0.1:5000>") as client:
+async with ToolboxClient("http://127.0.0.1:5000") as client:
 
     # these tools can be passed to your application!
     tools = client.load_toolset()
 {{< /highlight >}}
 
 For more detailed instructions on using the Toolbox LangChain SDK, see the
-[project's README](https://github.com/googleapis/mcp-toolbox-sdk-python/blob/main/packages/toolbox-langchain/README.md).
+[project's
+README](https://github.com/googleapis/mcp-toolbox-sdk-python/blob/main/packages/toolbox-langchain/README.md).
 
 {{% /tab %}}
 {{% tab header="Llamaindex" lang="en" %}}
@@ -193,7 +292,7 @@ from toolbox_llamaindex import ToolboxClient
 
 # update the url to point to your server
 
-async with ToolboxClient("<http://127.0.0.1:5000>") as client:
+async with ToolboxClient("http://127.0.0.1:5000") as client:
 
 # these tools can be passed to your application
 
@@ -201,7 +300,8 @@ async with ToolboxClient("<http://127.0.0.1:5000>") as client:
 {{< /highlight >}}
 
 For more detailed instructions on using the Toolbox Llamaindex SDK, see the
-[project's README](https://github.com/googleapis/genai-toolbox-llamaindex-python/blob/main/README.md).
+[project's
+README](https://github.com/googleapis/genai-toolbox-llamaindex-python/blob/main/README.md).
 
 {{% /tab %}}
 {{< /tabpane >}}
@@ -226,6 +326,10 @@ let client = new ToolboxClient(URL);
 const toolboxTools = await client.loadToolset('toolsetName');
 {{< /highlight >}}
 
+For more detailed instructions on using the Toolbox Core SDK, see the
+[project's
+README](https://github.com/googleapis/mcp-toolbox-sdk-js/blob/main/packages/toolbox-core/README.md).
+
 {{% /tab %}}
 {{% tab header="LangChain/Langraph" lang="en" %}}
 
@@ -249,6 +353,10 @@ const getTool = (toolboxTool) => tool(currTool, {
 // Use these tools in your Langchain/Langraph applications
 const tools = toolboxTools.map(getTool);
 {{< /highlight >}}
+
+For more detailed instructions on using the Toolbox Core SDK, see the
+[project's
+README](https://github.com/googleapis/mcp-toolbox-sdk-js/blob/main/packages/toolbox-core/README.md).
 
 {{% /tab %}}
 {{% tab header="Genkit" lang="en" %}}
@@ -285,6 +393,10 @@ const getTool = (toolboxTool) => ai.defineTool({
 const tools = toolboxTools.map(getTool);
 {{< /highlight >}}
 
+For more detailed instructions on using the Toolbox Core SDK, see the
+[project's
+README](https://github.com/googleapis/mcp-toolbox-sdk-js/blob/main/packages/toolbox-core/README.md).
+
 {{% /tab %}}
 {{% tab header="LlamaIndex" lang="en" %}}
 
@@ -303,7 +415,7 @@ const toolboxTools = await client.loadToolset('toolsetName');
 const getTool = (toolboxTool) => tool({
     name: toolboxTool.getName(),
     description: toolboxTool.getDescription(),
-    parameters: toolboxTool.getParams(),
+    parameters: toolboxTool.getParamSchema(),
     execute: toolboxTool
 });;
 
@@ -312,8 +424,320 @@ const tools = toolboxTools.map(getTool);
 
 {{< /highlight >}}
 
+For more detailed instructions on using the Toolbox Core SDK, see the
+[project's
+README](https://github.com/googleapis/mcp-toolbox-sdk-js/blob/main/packages/toolbox-core/README.md).
+
+{{% /tab %}}
+{{% tab header="ADK TS" lang="en" %}}
+
+{{< highlight javascript >}}
+import { ToolboxClient } from '@toolbox-sdk/adk';
+
+// Replace with the actual URL where your Toolbox service is running
+const URL = 'http://127.0.0.1:5000';
+
+let client = new ToolboxClient(URL);
+const tools = await client.loadToolset();
+
+// Use the client and tools as per requirement
+
+{{< /highlight >}}
+
+For detailed samples on using the Toolbox JS SDK with ADK JS, see the [project's
+README.](https://github.com/googleapis/mcp-toolbox-sdk-js/tree/main/packages/toolbox-adk/README.md)
+
 {{% /tab %}}
 {{< /tabpane >}}
 
-For more detailed instructions on using the Toolbox Core SDK, see the
-[project's README](https://github.com/googleapis/mcp-toolbox-sdk-js/blob/main/packages/toolbox-core/README.md).
+
+#### Go
+
+Once you've installed the [Toolbox Go
+SDK](https://pkg.go.dev/github.com/googleapis/mcp-toolbox-sdk-go/core), you can load
+tools:
+
+{{< tabpane text=true persist=header >}}
+{{% tab header="Core" lang="en" %}}
+
+{{< highlight go >}}
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/googleapis/mcp-toolbox-sdk-go/core"
+)
+
+func main() {
+	// update the url to point to your server
+	URL := "http://127.0.0.1:5000"
+	ctx := context.Background()
+
+	client, err := core.NewToolboxClient(URL)
+	if err != nil {
+		log.Fatalf("Failed to create Toolbox client: %v", err)
+	}
+
+	// Framework agnostic tools
+	tools, err := client.LoadToolset("toolsetName", ctx)
+	if err != nil {
+		log.Fatalf("Failed to load tools: %v", err)
+	}
+}
+{{< /highlight >}}
+
+{{% /tab %}}
+{{% tab header="LangChain Go" lang="en" %}}
+
+{{< highlight go >}}
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+
+	"github.com/googleapis/mcp-toolbox-sdk-go/core"
+	"github.com/tmc/langchaingo/llms"
+)
+
+func main() {
+	// Make sure to add the error checks
+	// update the url to point to your server
+	URL := "http://127.0.0.1:5000"
+	ctx := context.Background()
+
+	client, err := core.NewToolboxClient(URL)
+	if err != nil {
+		log.Fatalf("Failed to create Toolbox client: %v", err)
+	}
+
+	// Framework agnostic tool
+	tool, err := client.LoadTool("toolName", ctx)
+	if err != nil {
+		log.Fatalf("Failed to load tools: %v", err)
+	}
+
+	// Fetch the tool's input schema
+	inputschema, err := tool.InputSchema()
+	if err != nil {
+		log.Fatalf("Failed to fetch inputSchema: %v", err)
+	}
+
+	var paramsSchema map[string]any
+	_ = json.Unmarshal(inputschema, &paramsSchema)
+
+	// Use this tool with LangChainGo
+	langChainTool := llms.Tool{
+		Type: "function",
+		Function: &llms.FunctionDefinition{
+			Name:        tool.Name(),
+			Description: tool.Description(),
+			Parameters:  paramsSchema,
+		},
+	}
+}
+{{< /highlight >}}
+For end-to-end samples on using the Toolbox Go SDK with LangChain Go, see the [project's
+samples](https://github.com/googleapis/mcp-toolbox-sdk-go/tree/main/core/samples)
+
+{{% /tab %}}
+{{% tab header="Genkit Go" lang="en" %}}
+
+{{< highlight go >}}
+package main
+import (
+	"context"
+	"encoding/json"
+	"log"
+
+	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
+	"github.com/googleapis/mcp-toolbox-sdk-go/core"
+	"github.com/googleapis/mcp-toolbox-sdk-go/tbgenkit"
+	"github.com/invopop/jsonschema"
+)
+
+func main() {
+	// Make sure to add the error checks
+	// Update the url to point to your server
+	URL := "http://127.0.0.1:5000"
+	ctx := context.Background()
+	g, err := genkit.Init(ctx)
+
+	client, err := core.NewToolboxClient(URL)
+	if err != nil {
+		log.Fatalf("Failed to create Toolbox client: %v", err)
+	}
+
+	// Framework agnostic tool
+	tool, err := client.LoadTool("toolName", ctx)
+	if err != nil {
+		log.Fatalf("Failed to load tools: %v", err)
+	}
+
+	// Convert the tool using the tbgenkit package
+ 	// Use this tool with Genkit Go
+	genkitTool, err := tbgenkit.ToGenkitTool(tool, g)
+	if err != nil {
+		log.Fatalf("Failed to convert tool: %v\n", err)
+	}
+}
+{{< /highlight >}}
+For end-to-end samples on using the Toolbox Go SDK with Genkit Go, see the [project's
+samples](https://github.com/googleapis/mcp-toolbox-sdk-go/tree/main/tbgenkit/samples)
+
+{{% /tab %}}
+{{% tab header="Go GenAI" lang="en" %}}
+
+{{< highlight go >}}
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+
+	"github.com/googleapis/mcp-toolbox-sdk-go/core"
+	"google.golang.org/genai"
+)
+
+func main() {
+	// Make sure to add the error checks
+	// Update the url to point to your server
+	URL := "http://127.0.0.1:5000"
+	ctx := context.Background()
+
+	client, err := core.NewToolboxClient(URL)
+	if err != nil {
+		log.Fatalf("Failed to create Toolbox client: %v", err)
+	}
+
+	// Framework agnostic tool
+	tool, err := client.LoadTool("toolName", ctx)
+	if err != nil {
+		log.Fatalf("Failed to load tools: %v", err)
+	}
+
+	// Fetch the tool's input schema
+	inputschema, err := tool.InputSchema()
+	if err != nil {
+		log.Fatalf("Failed to fetch inputSchema: %v", err)
+	}
+
+	var schema *genai.Schema
+	_ = json.Unmarshal(inputschema, &schema)
+
+	funcDeclaration := &genai.FunctionDeclaration{
+		Name:        tool.Name(),
+		Description: tool.Description(),
+		Parameters:  schema,
+	}
+
+	// Use this tool with Go GenAI
+	genAITool := &genai.Tool{
+		FunctionDeclarations: []*genai.FunctionDeclaration{funcDeclaration},
+	}
+}
+{{< /highlight >}}
+For end-to-end samples on using the Toolbox Go SDK with Go GenAI, see the [project's
+samples](https://github.com/googleapis/mcp-toolbox-sdk-go/tree/main/core/samples)
+
+{{% /tab %}}
+
+{{% tab header="OpenAI Go" lang="en" %}}
+
+{{< highlight go >}}
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+
+	"github.com/googleapis/mcp-toolbox-sdk-go/core"
+	openai "github.com/openai/openai-go"
+)
+
+func main() {
+	// Make sure to add the error checks
+	// Update the url to point to your server
+	URL := "http://127.0.0.1:5000"
+	ctx := context.Background()
+
+	client, err := core.NewToolboxClient(URL)
+	if err != nil {
+		log.Fatalf("Failed to create Toolbox client: %v", err)
+	}
+
+	// Framework agnostic tool
+	tool, err := client.LoadTool("toolName", ctx)
+	if err != nil {
+		log.Fatalf("Failed to load tools: %v", err)
+	}
+
+	// Fetch the tool's input schema
+	inputschema, err := tool.InputSchema()
+	if err != nil {
+		log.Fatalf("Failed to fetch inputSchema: %v", err)
+	}
+
+	var paramsSchema openai.FunctionParameters
+	_ = json.Unmarshal(inputschema, &paramsSchema)
+
+	// Use this tool with OpenAI Go
+	openAITool := openai.ChatCompletionToolParam{
+		Function: openai.FunctionDefinitionParam{
+			Name:        tool.Name(),
+			Description: openai.String(tool.Description()),
+			Parameters:  paramsSchema,
+		},
+	}
+}
+{{< /highlight >}}
+For end-to-end samples on using the Toolbox Go SDK with OpenAI Go, see the [project's
+samples](https://github.com/googleapis/mcp-toolbox-sdk-go/tree/main/core/samples)
+
+{{% /tab %}}
+
+{{% tab header="ADK Go" lang="en" %}}
+
+{{< highlight go >}}
+package main
+
+import (
+  	"context"
+  	"fmt"
+  	"github.com/googleapis/mcp-toolbox-sdk-go/tbadk"
+)
+
+func main() {
+  	// Make sure to add the error checks
+	// Update the url to point to your server
+	URL := "http://127.0.0.1:5000"
+	ctx := context.Background()
+  	client, err := tbadk.NewToolboxClient(URL)
+  	if err != nil {
+		return fmt.Sprintln("Could not start Toolbox Client", err)
+  	}
+
+  	// Use this tool with ADK Go
+  	tool, err := client.LoadTool("toolName", ctx)
+  	if err != nil {
+		return fmt.Sprintln("Could not load Toolbox Tool", err)
+  	}
+}
+
+{{< /highlight >}}
+
+For end-to-end samples on using the Toolbox Go SDK with ADK Go, see the [project's
+samples](https://github.com/googleapis/mcp-toolbox-sdk-go/tree/main/tbadk/samples)
+
+{{% /tab %}}
+{{< /tabpane >}}
+
+For more detailed instructions on using the Toolbox Go SDK, see the
+[project's
+README](https://github.com/googleapis/mcp-toolbox-sdk-go/blob/main/core/README.md).

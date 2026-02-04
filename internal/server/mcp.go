@@ -19,9 +19,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,7 +143,7 @@ func (s *stdioSession) readInputStream(ctx context.Context) error {
 			}
 			return err
 		}
-		v, res, err := processMcpMessage(ctx, []byte(line), s.server, s.protocol, "")
+		v, res, err := processMcpMessage(ctx, []byte(line), s.server, s.protocol, "", "", nil)
 		if err != nil {
 			// errors during the processing of message will generate a valid MCP Error response.
 			// server can continue to run.
@@ -203,10 +205,13 @@ func (s *stdioSession) readLine(ctx context.Context) (string, error) {
 }
 
 // write writes to stdout with response to client
-func (s *stdioSession) write(ctx context.Context, response any) error {
-	res, _ := json.Marshal(response)
+func (s *stdioSession) write(_ context.Context, response any) error {
+	res, err := json.Marshal(response)
+	if err != nil {
+		return fmt.Errorf("failed to marshal response to JSON: %w", err)
+	}
 
-	_, err := fmt.Fprintf(s.writer, "%s\n", res)
+	_, err = fmt.Fprintf(s.writer, "%s\n", res)
 	return err
 }
 
@@ -214,7 +219,7 @@ func (s *stdioSession) write(ctx context.Context, response any) error {
 func mcpRouter(s *Server) (chi.Router, error) {
 	r := chi.NewRouter()
 
-	r.Use(middleware.AllowContentType("application/json"))
+	r.Use(middleware.AllowContentType("application/json", "application/json-rpc", "application/jsonrequest"))
 	r.Use(middleware.StripSlashes)
 	r.Use(render.SetContentType(render.ContentTypeJSON))
 
@@ -329,6 +334,8 @@ func methodNotAllowed(s *Server, w http.ResponseWriter, r *http.Request) {
 
 // httpHandler handles all mcp messages.
 func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
 	ctx, span := s.instrumentation.Tracer.Start(r.Context(), "toolbox/server/mcp")
 	r = r.WithContext(ctx)
 	ctx = util.WithLogger(r.Context(), s.logger)
@@ -350,14 +357,26 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 	}
 
 	// check if client have `Mcp-Session-Id` header
-	// if `Mcp-Session-Id` header is set, we are using v2025-03-26 since
-	// previous version doesn't use this header.
+	// `Mcp-Session-Id` is only set for v2025-03-26 in Toolbox
 	headerSessionId := r.Header.Get("Mcp-Session-Id")
 	if headerSessionId != "" {
 		protocolVersion = v20250326.PROTOCOL_VERSION
 	}
 
+	// check if client have `MCP-Protocol-Version` header
+	// Only supported for v2025-06-18+.
+	headerProtocolVersion := r.Header.Get("MCP-Protocol-Version")
+	if headerProtocolVersion != "" {
+		if !mcp.VerifyProtocolVersion(headerProtocolVersion) {
+			err := fmt.Errorf("invalid protocol version: %s", headerProtocolVersion)
+			_ = render.Render(w, r, newErrResponse(err, http.StatusBadRequest))
+			return
+		}
+		protocolVersion = headerProtocolVersion
+	}
+
 	toolsetName := chi.URLParam(r, "toolsetName")
+	promptsetName := chi.URLParam(r, "promptsetName")
 	s.logger.DebugContext(ctx, fmt.Sprintf("toolset name: %s", toolsetName))
 	span.SetAttributes(attribute.String("toolset_name", toolsetName))
 
@@ -387,18 +406,20 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		id := uuid.New().String()
 		s.logger.DebugContext(ctx, err.Error())
 		render.JSON(w, r, jsonrpc.NewError(id, jsonrpc.PARSE_ERROR, err.Error(), nil))
+		return
 	}
 
-	v, res, err := processMcpMessage(ctx, body, s, protocolVersion, toolsetName)
+	v, res, err := processMcpMessage(ctx, body, s, protocolVersion, toolsetName, promptsetName, r.Header)
+	if err != nil {
+		s.logger.DebugContext(ctx, fmt.Errorf("error processing message: %w", err).Error())
+	}
+
 	// notifications will return empty string
 	if res == nil {
 		// Notifications do not expect a response
 		// Toolbox doesn't do anything with notifications yet
 		w.WriteHeader(http.StatusAccepted)
 		return
-	}
-	if err != nil {
-		s.logger.DebugContext(ctx, err.Error())
 	}
 
 	// for v20250326, add the `Mcp-Session-Id` header
@@ -419,20 +440,32 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 			s.logger.DebugContext(ctx, "unable to add to event queue")
 		}
 	}
+	if rpcResponse, ok := res.(jsonrpc.JSONRPCError); ok {
+		code := rpcResponse.Error.Code
+		switch code {
+		case jsonrpc.INTERNAL_ERROR:
+			w.WriteHeader(http.StatusInternalServerError)
+		case jsonrpc.INVALID_REQUEST:
+			errStr := err.Error()
+			if errors.Is(err, util.ErrUnauthorized) {
+				w.WriteHeader(http.StatusUnauthorized)
+			} else if strings.Contains(errStr, "Error 401") {
+				w.WriteHeader(http.StatusUnauthorized)
+			} else if strings.Contains(errStr, "Error 403") {
+				w.WriteHeader(http.StatusForbidden)
+			}
+		}
+	}
 
 	// send HTTP response
 	render.JSON(w, r, res)
 }
 
 // processMcpMessage process the messages received from clients
-func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVersion string, toolsetName string) (string, any, error) {
+func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVersion string, toolsetName string, promptsetName string, header http.Header) (string, any, error) {
 	logger, err := util.LoggerFromContext(ctx)
 	if err != nil {
 		return "", jsonrpc.NewError("", jsonrpc.INTERNAL_ERROR, err.Error(), nil), err
-	}
-
-	if protocolVersion == "" {
-		protocolVersion = v20241105.PROTOCOL_VERSION
 	}
 
 	// Generic baseMessage could either be a JSONRPCNotification or JSONRPCRequest
@@ -484,7 +517,12 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 			err = fmt.Errorf("toolset does not exist")
 			return "", jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, err.Error(), nil), err
 		}
-		res, err := mcp.ProcessMethod(ctx, protocolVersion, baseMessage.Id, baseMessage.Method, toolset, s.ResourceMgr.GetToolsMap(), body)
+		promptset, ok := s.ResourceMgr.GetPromptset(promptsetName)
+		if !ok {
+			err = fmt.Errorf("promptset does not exist")
+			return "", jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, err.Error(), nil), err
+		}
+		res, err := mcp.ProcessMethod(ctx, protocolVersion, baseMessage.Id, baseMessage.Method, toolset, promptset, s.ResourceMgr, body, header)
 		return "", res, err
 	}
 }

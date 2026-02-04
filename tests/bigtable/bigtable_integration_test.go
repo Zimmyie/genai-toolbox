@@ -30,13 +30,13 @@ import (
 	"cloud.google.com/go/bigtable"
 	"github.com/google/uuid"
 	"github.com/googleapis/genai-toolbox/internal/testutils"
-	"github.com/googleapis/genai-toolbox/internal/tools"
+	"github.com/googleapis/genai-toolbox/internal/util/parameters"
 	"github.com/googleapis/genai-toolbox/tests"
 )
 
 var (
-	BigtableSourceKind = "bigtable"
-	BigtableToolKind   = "bigtable-sql"
+	BigtableSourceType = "bigtable"
+	BigtableToolType   = "bigtable-sql"
 	BigtableProject    = os.Getenv("BIGTABLE_PROJECT")
 	BigtableInstance   = os.Getenv("BIGTABLE_INSTANCE")
 )
@@ -50,7 +50,7 @@ func getBigtableVars(t *testing.T) map[string]any {
 	}
 
 	return map[string]any{
-		"kind":     BigtableSourceKind,
+		"type":     BigtableSourceType,
 		"project":  BigtableProject,
 		"instance": BigtableInstance,
 	}
@@ -79,7 +79,8 @@ func TestBigtableToolEndpoints(t *testing.T) {
 	// Do not change the shape of statement without checking tests/common_test.go.
 	// The structure and value of seed data has to match https://github.com/googleapis/genai-toolbox/blob/4dba0df12dc438eca3cb476ef52aa17cdf232c12/tests/common_test.go#L200-L251
 	paramTestStatement := fmt.Sprintf("SELECT TO_INT64(cf['id']) as id, CAST(cf['name'] AS string) as name, FROM %s WHERE TO_INT64(cf['id']) = @id OR CAST(cf['name'] AS string) = @name;", tableName)
-	paramTestStatement2 := fmt.Sprintf("SELECT TO_INT64(cf['id']) as id, CAST(cf['name'] AS string) as name, FROM %s WHERE TO_INT64(cf['id']) = @id;", tableName)
+	idParamTestStatement := fmt.Sprintf("SELECT TO_INT64(cf['id']) as id, CAST(cf['name'] AS string) as name, FROM %s WHERE TO_INT64(cf['id']) = @id;", tableName)
+	nameParamTestStatement := fmt.Sprintf("SELECT TO_INT64(cf['id']) as id, CAST(cf['name'] AS string) as name, FROM %s WHERE CAST(cf['name'] AS string) = @name;", tableName)
 	arrayTestStatement := fmt.Sprintf(
 		"SELECT TO_INT64(cf['id']) AS id, CAST(cf['name'] AS string) AS name FROM %s WHERE TO_INT64(cf['id']) IN UNNEST(@idArray) AND CAST(cf['name'] AS string) IN UNNEST(@nameArray);",
 		tableName,
@@ -98,7 +99,7 @@ func TestBigtableToolEndpoints(t *testing.T) {
 	defer teardownTableTmpl(t)
 
 	// Write config into a file and pass it to command
-	toolsFile := tests.GetToolsConfig(sourceConfig, BigtableToolKind, paramTestStatement, paramTestStatement2, arrayTestStatement, authToolStatement)
+	toolsFile := tests.GetToolsConfig(sourceConfig, BigtableToolType, paramTestStatement, idParamTestStatement, nameParamTestStatement, arrayTestStatement, authToolStatement)
 	toolsFile = addTemplateParamConfig(t, toolsFile)
 
 	cmd, cleanup, err := tests.StartCmd(ctx, toolsFile, args...)
@@ -115,23 +116,27 @@ func TestBigtableToolEndpoints(t *testing.T) {
 		t.Fatalf("toolbox didn't start successfully: %s", err)
 	}
 
-	tests.RunToolGetTest(t)
-
+	// Get configs for tests
 	// Actual test parameters are set in https://github.com/googleapis/genai-toolbox/blob/52b09a67cb40ac0c5f461598b4673136699a3089/tests/tool_test.go#L250
 	select1Want := "[{\"$col1\":1}]"
-	failInvocationWant := `{"jsonrpc":"2.0","id":"invoke-fail-tool","result":{"content":[{"type":"text","text":"unable to prepare statement: rpc error: code = InvalidArgument desc = Syntax error: Unexpected identifier \"SELEC\" [at 1:1]"}],"isError":true}}`
-	invokeParamWant, _, mcpInvokeParamWant := tests.GetNonSpannerInvokeParamWant()
-	invokeParamWantNull := `[{"id":4,"name":""}]`
-	tests.RunToolInvokeTest(t, select1Want, invokeParamWant, invokeParamWantNull, true)
-	tests.RunMCPToolCallMethod(t, mcpInvokeParamWant, failInvocationWant)
+	myToolById4Want := `[{"id":4,"name":""}]`
+	mcpMyFailToolWant := `{"jsonrpc":"2.0","id":"invoke-fail-tool","result":{"content":[{"type":"text","text":"unable to prepare statement: rpc error: code = InvalidArgument desc = Syntax error: Unexpected identifier \"SELEC\" [at 1:1]"}],"isError":true}}`
+	mcpSelect1Want := `{"jsonrpc":"2.0","id":"invoke my-auth-required-tool","result":{"content":[{"type":"text","text":"{\"$col1\":1}"}]}}`
+	nameFieldArray := `["CAST(cf['name'] AS string) as name"]`
+	nameColFilter := "CAST(cf['name'] AS string)"
 
-	templateParamTestConfig := tests.NewTemplateParameterTestConfig(
-		tests.WithIgnoreDdl(),
-		tests.WithIgnoreInsert(),
-		tests.WithReplaceNameFieldArray(`["CAST(cf['name'] AS string) as name"]`),
-		tests.WithReplaceNameColFilter("CAST(cf['name'] AS string)"),
+	// Run tests
+	tests.RunToolGetTest(t)
+	tests.RunToolInvokeTest(t, select1Want,
+		tests.WithMyToolById4Want(myToolById4Want),
 	)
-	tests.RunToolInvokeWithTemplateParameters(t, tableNameTemplateParam, templateParamTestConfig)
+	tests.RunMCPToolCallMethod(t, mcpMyFailToolWant, mcpSelect1Want)
+	tests.RunToolInvokeWithTemplateParameters(t, tableNameTemplateParam,
+		tests.WithNameFieldArray(nameFieldArray),
+		tests.WithNameColFilter(nameColFilter),
+		tests.DisableDdlTest(),
+		tests.DisableInsertTest(),
+	)
 }
 
 func convertToBytes(v int) []byte {
@@ -286,43 +291,43 @@ func addTemplateParamConfig(t *testing.T, config map[string]any) map[string]any 
 		t.Fatalf("unable to get tools from config")
 	}
 	toolsMap["select-templateParams-tool"] = map[string]any{
-		"kind":        "bigtable-sql",
+		"type":        "bigtable-sql",
 		"source":      "my-instance",
 		"description": "Create table tool with template parameters",
 		"statement":   "SELECT TO_INT64(cf['age']) as age, TO_INT64(cf['id']) as id, CAST(cf['name'] AS string) as name, FROM {{.tableName}};",
-		"templateParameters": []tools.Parameter{
-			tools.NewStringParameter("tableName", "some description"),
+		"templateParameters": []parameters.Parameter{
+			parameters.NewStringParameter("tableName", "some description"),
 		},
 	}
 	toolsMap["select-templateParams-combined-tool"] = map[string]any{
-		"kind":        "bigtable-sql",
+		"type":        "bigtable-sql",
 		"source":      "my-instance",
 		"description": "Create table tool with template parameters",
 		"statement":   "SELECT TO_INT64(cf['age']) as age, TO_INT64(cf['id']) as id, CAST(cf['name'] AS string) as name, FROM {{.tableName}} WHERE TO_INT64(cf['id']) = @id;",
-		"parameters":  []tools.Parameter{tools.NewIntParameter("id", "the id of the user")},
-		"templateParameters": []tools.Parameter{
-			tools.NewStringParameter("tableName", "some description"),
+		"parameters":  []parameters.Parameter{parameters.NewIntParameter("id", "the id of the user")},
+		"templateParameters": []parameters.Parameter{
+			parameters.NewStringParameter("tableName", "some description"),
 		},
 	}
 	toolsMap["select-fields-templateParams-tool"] = map[string]any{
-		"kind":        "bigtable-sql",
+		"type":        "bigtable-sql",
 		"source":      "my-instance",
 		"description": "Create table tool with template parameters",
 		"statement":   "SELECT {{array .fields}}, FROM {{.tableName}};",
-		"templateParameters": []tools.Parameter{
-			tools.NewStringParameter("tableName", "some description"),
-			tools.NewArrayParameter("fields", "The fields to select from", tools.NewStringParameter("field", "A field that will be returned from the query.")),
+		"templateParameters": []parameters.Parameter{
+			parameters.NewStringParameter("tableName", "some description"),
+			parameters.NewArrayParameter("fields", "The fields to select from", parameters.NewStringParameter("field", "A field that will be returned from the query.")),
 		},
 	}
 	toolsMap["select-filter-templateParams-combined-tool"] = map[string]any{
-		"kind":        "bigtable-sql",
+		"type":        "bigtable-sql",
 		"source":      "my-instance",
 		"description": "Create table tool with template parameters",
 		"statement":   "SELECT TO_INT64(cf['age']) as age, TO_INT64(cf['id']) as id, CAST(cf['name'] AS string) as name, FROM {{.tableName}} WHERE {{.columnFilter}} = @name;",
-		"parameters":  []tools.Parameter{tools.NewStringParameter("name", "the name of the user")},
-		"templateParameters": []tools.Parameter{
-			tools.NewStringParameter("tableName", "some description"),
-			tools.NewStringParameter("columnFilter", "some description"),
+		"parameters":  []parameters.Parameter{parameters.NewStringParameter("name", "the name of the user")},
+		"templateParameters": []parameters.Parameter{
+			parameters.NewStringParameter("tableName", "some description"),
+			parameters.NewStringParameter("columnFilter", "some description"),
 		},
 	}
 	config["tools"] = toolsMap

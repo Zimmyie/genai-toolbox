@@ -20,19 +20,22 @@ import (
 
 	bigqueryapi "cloud.google.com/go/bigquery"
 	yaml "github.com/goccy/go-yaml"
+	"github.com/googleapis/genai-toolbox/internal/embeddingmodels"
 	"github.com/googleapis/genai-toolbox/internal/sources"
-	bigqueryds "github.com/googleapis/genai-toolbox/internal/sources/bigquery"
 	"github.com/googleapis/genai-toolbox/internal/tools"
+	bqutil "github.com/googleapis/genai-toolbox/internal/tools/bigquery/bigquerycommon"
+	"github.com/googleapis/genai-toolbox/internal/util/parameters"
+	bigqueryrestapi "google.golang.org/api/bigquery/v2"
 )
 
-const kind string = "bigquery-get-table-info"
+const resourceType string = "bigquery-get-table-info"
 const projectKey string = "project"
 const datasetKey string = "dataset"
 const tableKey string = "table"
 
 func init() {
-	if !tools.Register(kind, newConfig) {
-		panic(fmt.Sprintf("tool kind %q already registered", kind))
+	if !tools.Register(resourceType, newConfig) {
+		panic(fmt.Sprintf("tool type %q already registered", resourceType))
 	}
 }
 
@@ -45,17 +48,16 @@ func newConfig(ctx context.Context, name string, decoder *yaml.Decoder) (tools.T
 }
 
 type compatibleSource interface {
-	BigQueryClient() *bigqueryapi.Client
+	BigQueryProject() string
+	UseClientAuthorization() bool
+	IsDatasetAllowed(projectID, datasetID string) bool
+	BigQueryAllowedDatasets() []string
+	RetrieveClientAndService(tools.AccessToken) (*bigqueryapi.Client, *bigqueryrestapi.Service, error)
 }
-
-// validate compatible sources are still compatible
-var _ compatibleSource = &bigqueryds.Source{}
-
-var compatibleSources = [...]string{bigqueryds.SourceKind}
 
 type Config struct {
 	Name         string   `yaml:"name" validate:"required"`
-	Kind         string   `yaml:"kind" validate:"required"`
+	Type         string   `yaml:"type" validate:"required"`
 	Source       string   `yaml:"source" validate:"required"`
 	Description  string   `yaml:"description" validate:"required"`
 	AuthRequired []string `yaml:"authRequired"`
@@ -64,8 +66,8 @@ type Config struct {
 // validate interface
 var _ tools.ToolConfig = Config{}
 
-func (cfg Config) ToolConfigKind() string {
-	return kind
+func (cfg Config) ToolConfigType() string {
+	return resourceType
 }
 
 func (cfg Config) Initialize(srcs map[string]sources.Source) (tools.Tool, error) {
@@ -78,29 +80,33 @@ func (cfg Config) Initialize(srcs map[string]sources.Source) (tools.Tool, error)
 	// verify the source is compatible
 	s, ok := rawS.(compatibleSource)
 	if !ok {
-		return nil, fmt.Errorf("invalid source for %q tool: source kind must be one of %q", kind, compatibleSources)
+		return nil, fmt.Errorf("invalid source for %q tool: source %q not compatible", resourceType, cfg.Source)
 	}
 
-	projectParameter := tools.NewStringParameterWithDefault(projectKey, s.BigQueryClient().Project(), "The Google Cloud project ID containing the dataset and table.")
-	datasetParameter := tools.NewStringParameter(datasetKey, "The table's parent dataset.")
-	tableParameter := tools.NewStringParameter(tableKey, "The table to get metadata information.")
-	parameters := tools.Parameters{projectParameter, datasetParameter, tableParameter}
+	defaultProjectID := s.BigQueryProject()
+	projectDescription := "The Google Cloud project ID containing the dataset and table."
+	datasetDescription := "The table's parent dataset."
+	var datasetParameter parameters.Parameter
+	var projectParameter parameters.Parameter
 
-	mcpManifest := tools.McpManifest{
-		Name:        cfg.Name,
-		Description: cfg.Description,
-		InputSchema: parameters.McpManifest(),
-	}
+	projectParameter, datasetParameter = bqutil.InitializeDatasetParameters(
+		s.BigQueryAllowedDatasets(),
+		defaultProjectID,
+		projectKey, datasetKey,
+		projectDescription, datasetDescription,
+	)
+
+	tableParameter := parameters.NewStringParameter(tableKey, "The table to get metadata information.")
+	params := parameters.Parameters{projectParameter, datasetParameter, tableParameter}
+
+	mcpManifest := tools.GetMcpManifest(cfg.Name, cfg.Description, cfg.AuthRequired, params, nil)
 
 	// finish tool setup
 	t := Tool{
-		Name:         cfg.Name,
-		Kind:         kind,
-		Parameters:   parameters,
-		AuthRequired: cfg.AuthRequired,
-		Client:       s.BigQueryClient(),
-		manifest:     tools.Manifest{Description: cfg.Description, Parameters: parameters.Manifest(), AuthRequired: cfg.AuthRequired},
-		mcpManifest:  mcpManifest,
+		Config:      cfg,
+		Parameters:  params,
+		manifest:    tools.Manifest{Description: cfg.Description, Parameters: params.Manifest(), AuthRequired: cfg.AuthRequired},
+		mcpManifest: mcpManifest,
 	}
 	return t, nil
 }
@@ -109,18 +115,22 @@ func (cfg Config) Initialize(srcs map[string]sources.Source) (tools.Tool, error)
 var _ tools.Tool = Tool{}
 
 type Tool struct {
-	Name         string           `yaml:"name"`
-	Kind         string           `yaml:"kind"`
-	AuthRequired []string         `yaml:"authRequired"`
-	Parameters   tools.Parameters `yaml:"parameters"`
-
-	Client      *bigqueryapi.Client
-	Statement   string
+	Config
+	Parameters  parameters.Parameters `yaml:"parameters"`
 	manifest    tools.Manifest
 	mcpManifest tools.McpManifest
 }
 
-func (t Tool) Invoke(ctx context.Context, params tools.ParamValues) ([]any, error) {
+func (t Tool) ToConfig() tools.ToolConfig {
+	return t.Config
+}
+
+func (t Tool) Invoke(ctx context.Context, resourceMgr tools.SourceProvider, params parameters.ParamValues, accessToken tools.AccessToken) (any, error) {
+	source, err := tools.GetCompatibleSource[compatibleSource](resourceMgr, t.Source, t.Name, t.Type)
+	if err != nil {
+		return nil, err
+	}
+
 	mapParams := params.AsMap()
 	projectId, ok := mapParams[projectKey].(string)
 	if !ok {
@@ -137,7 +147,16 @@ func (t Tool) Invoke(ctx context.Context, params tools.ParamValues) ([]any, erro
 		return nil, fmt.Errorf("invalid or missing '%s' parameter; expected a string", tableKey)
 	}
 
-	dsHandle := t.Client.DatasetInProject(projectId, datasetId)
+	if !source.IsDatasetAllowed(projectId, datasetId) {
+		return nil, fmt.Errorf("access denied to dataset '%s' because it is not in the configured list of allowed datasets for project '%s'", datasetId, projectId)
+	}
+
+	bqClient, _, err := source.RetrieveClientAndService(accessToken)
+	if err != nil {
+		return nil, err
+	}
+
+	dsHandle := bqClient.DatasetInProject(projectId, datasetId)
 	tableHandle := dsHandle.Table(tableId)
 
 	metadata, err := tableHandle.Metadata(ctx)
@@ -145,11 +164,11 @@ func (t Tool) Invoke(ctx context.Context, params tools.ParamValues) ([]any, erro
 		return nil, fmt.Errorf("failed to get metadata for table %s.%s.%s: %w", projectId, datasetId, tableId, err)
 	}
 
-	return []any{metadata}, nil
+	return metadata, nil
 }
 
-func (t Tool) ParseParams(data map[string]any, claims map[string]map[string]any) (tools.ParamValues, error) {
-	return tools.ParseParams(t.Parameters, data, claims)
+func (t Tool) EmbedParams(ctx context.Context, paramValues parameters.ParamValues, embeddingModelsMap map[string]embeddingmodels.EmbeddingModel) (parameters.ParamValues, error) {
+	return parameters.EmbedParams(ctx, t.Parameters, paramValues, embeddingModelsMap, nil)
 }
 
 func (t Tool) Manifest() tools.Manifest {
@@ -162,4 +181,20 @@ func (t Tool) McpManifest() tools.McpManifest {
 
 func (t Tool) Authorized(verifiedAuthServices []string) bool {
 	return tools.IsAuthorized(t.AuthRequired, verifiedAuthServices)
+}
+
+func (t Tool) RequiresClientAuthorization(resourceMgr tools.SourceProvider) (bool, error) {
+	source, err := tools.GetCompatibleSource[compatibleSource](resourceMgr, t.Source, t.Name, t.Type)
+	if err != nil {
+		return false, err
+	}
+	return source.UseClientAuthorization(), nil
+}
+
+func (t Tool) GetAuthTokenHeaderName(resourceMgr tools.SourceProvider) (string, error) {
+	return "Authorization", nil
+}
+
+func (t Tool) GetParameters() parameters.Parameters {
+	return t.Parameters
 }

@@ -29,16 +29,18 @@ import (
 
 	"github.com/googleapis/genai-toolbox/internal/log"
 	"github.com/googleapis/genai-toolbox/internal/server/mcp/jsonrpc"
+	"github.com/googleapis/genai-toolbox/internal/server/resources"
 	"github.com/googleapis/genai-toolbox/internal/telemetry"
-	"github.com/googleapis/genai-toolbox/internal/tools"
 )
 
 const jsonrpcVersion = "2.0"
 const protocolVersion20241105 = "2024-11-05"
 const protocolVersion20250326 = "2025-03-26"
+const protocolVersion20250618 = "2025-06-18"
+const protocolVersion20251125 = "2025-11-25"
 const serverName = "Toolbox"
 
-var tool1InputSchema = map[string]any{
+var basicInputSchema = map[string]any{
 	"type":       "object",
 	"properties": map[string]any{},
 	"required":   []any{},
@@ -65,10 +67,19 @@ var tool3InputSchema = map[string]any{
 	"required": []any{"my_array"},
 }
 
+var prompt2Args = []any{
+	map[string]any{
+		"name":        "arg1",
+		"description": "This is the first argument.",
+		"required":    true,
+	},
+}
+
 func TestMcpEndpointWithoutInitialized(t *testing.T) {
-	mockTools := []MockTool{tool1, tool2, tool3}
-	toolsMap, toolsets := setUpResources(t, mockTools)
-	r, shutdown := setUpServer(t, "mcp", toolsMap, toolsets)
+	mockTools := []MockTool{tool1, tool2, tool3, tool4, tool5}
+	mockPrompts := []MockPrompt{prompt1, prompt2}
+	toolsMap, toolsets, promptsMap, promptsets := setUpResources(t, mockTools, mockPrompts)
+	r, shutdown := setUpServer(t, "mcp", toolsMap, toolsets, promptsMap, promptsets)
 	defer shutdown()
 	ts := runServer(r, false)
 	defer ts.Close()
@@ -80,6 +91,23 @@ func TestMcpEndpointWithoutInitialized(t *testing.T) {
 		body  jsonrpc.JSONRPCRequest
 		want  map[string]any
 	}{
+		{
+			name: "ping",
+			url:  "/",
+			body: jsonrpc.JSONRPCRequest{
+				Jsonrpc: jsonrpcVersion,
+				Id:      "ping-test-123",
+				Request: jsonrpc.Request{
+					Method: "ping",
+				},
+			},
+			isErr: false,
+			want: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "ping-test-123",
+				"result":  map[string]any{},
+			},
+		},
 		{
 			name: "tools/list",
 			url:  "/",
@@ -98,7 +126,7 @@ func TestMcpEndpointWithoutInitialized(t *testing.T) {
 					"tools": []any{
 						map[string]any{
 							"name":        "no_params",
-							"inputSchema": tool1InputSchema,
+							"inputSchema": basicInputSchema,
 						},
 						map[string]any{
 							"name":        "some_params",
@@ -108,6 +136,14 @@ func TestMcpEndpointWithoutInitialized(t *testing.T) {
 							"name":        "array_param",
 							"description": "some description",
 							"inputSchema": tool3InputSchema,
+						},
+						map[string]any{
+							"name":        "unauthorized_tool",
+							"inputSchema": basicInputSchema,
+						},
+						map[string]any{
+							"name":        "require_client_auth_tool",
+							"inputSchema": basicInputSchema,
 						},
 					},
 				},
@@ -151,6 +187,152 @@ func TestMcpEndpointWithoutInitialized(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "call tool1 unauthorized tool",
+			url:  "/",
+			body: jsonrpc.JSONRPCRequest{
+				Jsonrpc: jsonrpcVersion,
+				Id:      "tools-call-tool1",
+				Request: jsonrpc.Request{
+					Method: "tools/call",
+				},
+				Params: map[string]any{
+					"name": "no_params",
+				},
+			},
+			want: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "tools-call-tool1",
+				"result": map[string]any{
+					"content": []any{
+						map[string]any{
+							"type": "text",
+							"text": `"no_params"`,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "call tool4 unauthorized tool",
+			url:  "/",
+			body: jsonrpc.JSONRPCRequest{
+				Jsonrpc: jsonrpcVersion,
+				Id:      "tools-call-tool4",
+				Request: jsonrpc.Request{
+					Method: "tools/call",
+				},
+				Params: map[string]any{
+					"name": "unauthorized_tool",
+				},
+			},
+			want: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "tools-call-tool4",
+				"error": map[string]any{
+					"code":    -32600.0,
+					"message": "unauthorized Tool call: Please make sure your specify correct auth headers: unauthorized",
+				},
+			},
+		},
+		{
+			name: "call tool5 unauthorized tool",
+			url:  "/",
+			body: jsonrpc.JSONRPCRequest{
+				Jsonrpc: jsonrpcVersion,
+				Id:      "tools-call-tool5",
+				Request: jsonrpc.Request{
+					Method: "tools/call",
+				},
+				Params: map[string]any{
+					"name": "require_client_auth_tool",
+				},
+			},
+			want: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "tools-call-tool5",
+				"error": map[string]any{
+					"code":    -32600.0,
+					"message": "missing access token in the 'Authorization' header",
+				},
+			},
+		},
+		{
+			name: "prompts/list",
+			url:  "/",
+			body: jsonrpc.JSONRPCRequest{
+				Jsonrpc: jsonrpcVersion,
+				Id:      "prompts-list-uninitialized",
+				Request: jsonrpc.Request{
+					Method: "prompts/list",
+				},
+			},
+			isErr: false,
+			want: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "prompts-list-uninitialized",
+				"result": map[string]any{
+					"prompts": []any{
+						map[string]any{
+							"name": "prompt1",
+						},
+						map[string]any{
+							"name":      "prompt2",
+							"arguments": prompt2Args,
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "prompts/get non-existent prompt",
+			url:   "/",
+			isErr: true,
+			body: jsonrpc.JSONRPCRequest{
+				Jsonrpc: jsonrpcVersion,
+				Id:      "prompts-get-non-existent",
+				Request: jsonrpc.Request{
+					Method: "prompts/get",
+				},
+				Params: map[string]any{
+					"name": "non_existent_prompt",
+				},
+			},
+			want: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "prompts-get-non-existent",
+				"error": map[string]any{
+					"code":    -32602.0,
+					"message": `prompt with name "non_existent_prompt" does not exist`,
+				},
+			},
+		},
+		{
+			name:  "prompts/get with invalid arguments",
+			url:   "/",
+			isErr: true,
+			body: jsonrpc.JSONRPCRequest{
+				Jsonrpc: jsonrpcVersion,
+				Id:      "prompts-get-invalid-args",
+				Request: jsonrpc.Request{
+					Method: "prompts/get",
+				},
+				Params: map[string]any{
+					"name": "prompt2",
+					"arguments": map[string]any{
+						"arg1": 42, // prompt2 expects a string, we send a number
+					},
+				},
+			},
+			want: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "prompts-get-invalid-args",
+				"error": map[string]any{
+					"code":    -32602.0,
+					"message": `invalid arguments for prompt "prompt2": unable to parse value for "arg1": %!q(float64=42) not type "string"`,
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -158,7 +340,6 @@ func TestMcpEndpointWithoutInitialized(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error during marshaling of body")
 			}
-
 			resp, body, err := runRequest(ts, http.MethodPost, tc.url, bytes.NewBuffer(reqMarshal), nil)
 			if err != nil {
 				t.Fatalf("unexpected error during request: %s", err)
@@ -240,9 +421,10 @@ func runInitializeLifecycle(t *testing.T, ts *httptest.Server, protocolVersion s
 }
 
 func TestMcpEndpoint(t *testing.T) {
-	mockTools := []MockTool{tool1, tool2, tool3}
-	toolsMap, toolsets := setUpResources(t, mockTools)
-	r, shutdown := setUpServer(t, "mcp", toolsMap, toolsets)
+	mockTools := []MockTool{tool1, tool2, tool3, tool4, tool5}
+	mockPrompts := []MockPrompt{prompt1, prompt2}
+	toolsMap, toolsets, promptsMap, promptsets := setUpResources(t, mockTools, mockPrompts)
+	r, shutdown := setUpServer(t, "mcp", toolsMap, toolsets, promptsMap, promptsets)
 	defer shutdown()
 	ts := runServer(r, false)
 	defer ts.Close()
@@ -254,7 +436,7 @@ func TestMcpEndpoint(t *testing.T) {
 		initWant map[string]any
 	}{
 		{
-			name:     "verson 2024-11-05",
+			name:     "version 2024-11-05",
 			protocol: protocolVersion20241105,
 			idHeader: false,
 			initWant: map[string]any{
@@ -263,14 +445,15 @@ func TestMcpEndpoint(t *testing.T) {
 				"result": map[string]any{
 					"protocolVersion": "2024-11-05",
 					"capabilities": map[string]any{
-						"tools": map[string]any{"listChanged": false},
+						"tools":   map[string]any{"listChanged": false},
+						"prompts": map[string]any{"listChanged": false},
 					},
 					"serverInfo": map[string]any{"name": serverName, "version": fakeVersionString},
 				},
 			},
 		},
 		{
-			name:     "verson 2025-03-26",
+			name:     "version 2025-03-26",
 			protocol: protocolVersion20250326,
 			idHeader: true,
 			initWant: map[string]any{
@@ -279,7 +462,42 @@ func TestMcpEndpoint(t *testing.T) {
 				"result": map[string]any{
 					"protocolVersion": "2025-03-26",
 					"capabilities": map[string]any{
-						"tools": map[string]any{"listChanged": false},
+						"tools":   map[string]any{"listChanged": false},
+						"prompts": map[string]any{"listChanged": false},
+					},
+					"serverInfo": map[string]any{"name": serverName, "version": fakeVersionString},
+				},
+			},
+		},
+		{
+			name:     "version 2025-06-18",
+			protocol: protocolVersion20250618,
+			idHeader: false,
+			initWant: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "mcp-initialize",
+				"result": map[string]any{
+					"protocolVersion": "2025-06-18",
+					"capabilities": map[string]any{
+						"tools":   map[string]any{"listChanged": false},
+						"prompts": map[string]any{"listChanged": false},
+					},
+					"serverInfo": map[string]any{"name": serverName, "version": fakeVersionString},
+				},
+			},
+		},
+		{
+			name:     "version 2025-11-25",
+			protocol: protocolVersion20251125,
+			idHeader: false,
+			initWant: map[string]any{
+				"jsonrpc": "2.0",
+				"id":      "mcp-initialize",
+				"result": map[string]any{
+					"protocolVersion": "2025-11-25",
+					"capabilities": map[string]any{
+						"tools":   map[string]any{"listChanged": false},
+						"prompts": map[string]any{"listChanged": false},
 					},
 					"serverInfo": map[string]any{"name": serverName, "version": fakeVersionString},
 				},
@@ -294,13 +512,17 @@ func TestMcpEndpoint(t *testing.T) {
 			if sessionId != "" {
 				header["Mcp-Session-Id"] = sessionId
 			}
+			if vtc.protocol != protocolVersion20241105 && vtc.protocol != protocolVersion20250326 {
+				header["MCP-Protocol-Version"] = vtc.protocol
+			}
 
 			testCases := []struct {
-				name  string
-				url   string
-				isErr bool
-				body  any
-				want  map[string]any
+				name           string
+				url            string
+				isErr          bool
+				body           any
+				wantStatusCode int
+				want           map[string]any
 			}{
 				{
 					name: "basic notification",
@@ -310,6 +532,24 @@ func TestMcpEndpoint(t *testing.T) {
 						Request: jsonrpc.Request{
 							Method: "notification",
 						},
+					},
+					wantStatusCode: http.StatusAccepted,
+				},
+				{
+					name: "ping",
+					url:  "/",
+					body: jsonrpc.JSONRPCRequest{
+						Jsonrpc: jsonrpcVersion,
+						Id:      "ping-test-123",
+						Request: jsonrpc.Request{
+							Method: "ping",
+						},
+					},
+					wantStatusCode: http.StatusOK,
+					want: map[string]any{
+						"jsonrpc": "2.0",
+						"id":      "ping-test-123",
+						"result":  map[string]any{},
 					},
 				},
 				{
@@ -322,6 +562,7 @@ func TestMcpEndpoint(t *testing.T) {
 							Method: "tools/list",
 						},
 					},
+					wantStatusCode: http.StatusOK,
 					want: map[string]any{
 						"jsonrpc": "2.0",
 						"id":      "tools-list",
@@ -329,7 +570,7 @@ func TestMcpEndpoint(t *testing.T) {
 							"tools": []any{
 								map[string]any{
 									"name":        "no_params",
-									"inputSchema": tool1InputSchema,
+									"inputSchema": basicInputSchema,
 								},
 								map[string]any{
 									"name":        "some_params",
@@ -339,6 +580,74 @@ func TestMcpEndpoint(t *testing.T) {
 									"name":        "array_param",
 									"description": "some description",
 									"inputSchema": tool3InputSchema,
+								},
+								map[string]any{
+									"name":        "unauthorized_tool",
+									"inputSchema": basicInputSchema,
+								},
+								map[string]any{
+									"name":        "require_client_auth_tool",
+									"inputSchema": basicInputSchema,
+								},
+							},
+						},
+					},
+				},
+				{
+					name: "prompts/list",
+					url:  "/",
+					body: jsonrpc.JSONRPCRequest{
+						Jsonrpc: jsonrpcVersion,
+						Id:      "prompts-list",
+						Request: jsonrpc.Request{
+							Method: "prompts/list",
+						},
+					},
+					wantStatusCode: http.StatusOK,
+					want: map[string]any{
+						"jsonrpc": "2.0",
+						"id":      "prompts-list",
+						"result": map[string]any{
+							"prompts": []any{
+								map[string]any{
+									"name": "prompt1",
+								},
+								map[string]any{
+									"name":      "prompt2",
+									"arguments": prompt2Args,
+								},
+							},
+						},
+					},
+				},
+				{
+					name: "prompts/get",
+					url:  "/",
+					body: jsonrpc.JSONRPCRequest{
+						Jsonrpc: jsonrpcVersion,
+						Id:      "prompts-get-prompt2",
+						Request: jsonrpc.Request{
+							Method: "prompts/get",
+						},
+						Params: map[string]any{
+							"name": "prompt2",
+							"arguments": map[string]any{
+								"arg1": "value1",
+							},
+						},
+					},
+					wantStatusCode: http.StatusOK,
+					want: map[string]any{
+						"jsonrpc": "2.0",
+						"id":      "prompts-get-prompt2",
+						"result": map[string]any{
+							"messages": []any{
+								map[string]any{
+									"role": "user",
+									"content": map[string]any{
+										"type": "text",
+										"text": "substituted prompt2",
+									},
 								},
 							},
 						},
@@ -354,6 +663,7 @@ func TestMcpEndpoint(t *testing.T) {
 							Method: "tools/list",
 						},
 					},
+					wantStatusCode: http.StatusOK,
 					want: map[string]any{
 						"jsonrpc": "2.0",
 						"id":      "tools-list-tool1",
@@ -361,7 +671,7 @@ func TestMcpEndpoint(t *testing.T) {
 							"tools": []any{
 								map[string]any{
 									"name":        "no_params",
-									"inputSchema": tool1InputSchema,
+									"inputSchema": basicInputSchema,
 								},
 							},
 						},
@@ -378,6 +688,7 @@ func TestMcpEndpoint(t *testing.T) {
 							Method: "tools/list",
 						},
 					},
+					wantStatusCode: http.StatusOK,
 					want: map[string]any{
 						"jsonrpc": "2.0",
 						"id":      "tools-list-invalid-toolset",
@@ -396,6 +707,7 @@ func TestMcpEndpoint(t *testing.T) {
 						Id:      "missing-method",
 						Request: jsonrpc.Request{},
 					},
+					wantStatusCode: http.StatusOK,
 					want: map[string]any{
 						"jsonrpc": "2.0",
 						"id":      "missing-method",
@@ -416,6 +728,7 @@ func TestMcpEndpoint(t *testing.T) {
 							Method: "foo",
 						},
 					},
+					wantStatusCode: http.StatusOK,
 					want: map[string]any{
 						"jsonrpc": "2.0",
 						"id":      "invalid-method",
@@ -436,6 +749,7 @@ func TestMcpEndpoint(t *testing.T) {
 							Method: "foo",
 						},
 					},
+					wantStatusCode: http.StatusOK,
 					want: map[string]any{
 						"jsonrpc": "2.0",
 						"id":      "invalid-jsonrpc-version",
@@ -465,11 +779,85 @@ func TestMcpEndpoint(t *testing.T) {
 							},
 						},
 					},
+					wantStatusCode: http.StatusOK,
 					want: map[string]any{
 						"jsonrpc": "2.0",
 						"error": map[string]any{
 							"code":    -32600.0,
 							"message": "not supporting batch requests",
+						},
+					},
+				},
+				{
+					name: "call tool1 unauthorized tool",
+					url:  "/",
+					body: jsonrpc.JSONRPCRequest{
+						Jsonrpc: jsonrpcVersion,
+						Id:      "tools-call-tool1",
+						Request: jsonrpc.Request{
+							Method: "tools/call",
+						},
+						Params: map[string]any{
+							"name": "no_params",
+						},
+					},
+					wantStatusCode: http.StatusOK,
+					want: map[string]any{
+						"jsonrpc": "2.0",
+						"id":      "tools-call-tool1",
+						"result": map[string]any{
+							"content": []any{
+								map[string]any{
+									"type": "text",
+									"text": `"no_params"`,
+								},
+							},
+						},
+					},
+				},
+				{
+					name: "call tool4 unauthorized tool",
+					url:  "/",
+					body: jsonrpc.JSONRPCRequest{
+						Jsonrpc: jsonrpcVersion,
+						Id:      "tools-call-tool4",
+						Request: jsonrpc.Request{
+							Method: "tools/call",
+						},
+						Params: map[string]any{
+							"name": "unauthorized_tool",
+						},
+					},
+					wantStatusCode: http.StatusUnauthorized,
+					want: map[string]any{
+						"jsonrpc": "2.0",
+						"id":      "tools-call-tool4",
+						"error": map[string]any{
+							"code":    -32600.0,
+							"message": "unauthorized Tool call: Please make sure your specify correct auth headers: unauthorized",
+						},
+					},
+				},
+				{
+					name: "call tool5 unauthorized tool",
+					url:  "/",
+					body: jsonrpc.JSONRPCRequest{
+						Jsonrpc: jsonrpcVersion,
+						Id:      "tools-call-tool5",
+						Request: jsonrpc.Request{
+							Method: "tools/call",
+						},
+						Params: map[string]any{
+							"name": "require_client_auth_tool",
+						},
+					},
+					wantStatusCode: http.StatusUnauthorized,
+					want: map[string]any{
+						"jsonrpc": "2.0",
+						"id":      "tools-call-tool5",
+						"error": map[string]any{
+							"code":    -32600.0,
+							"message": "missing access token in the 'Authorization' header",
 						},
 					},
 				},
@@ -481,13 +869,18 @@ func TestMcpEndpoint(t *testing.T) {
 						t.Fatalf("unexpected error during marshaling of body")
 					}
 
-					if vtc.protocol == protocolVersion20250326 && len(header) == 0 {
+					if vtc.protocol != protocolVersion20241105 && len(header) == 0 {
 						t.Fatalf("header is missing")
 					}
 
 					resp, body, err := runRequest(ts, http.MethodPost, tc.url, bytes.NewBuffer(reqMarshal), header)
+
 					if err != nil {
 						t.Fatalf("unexpected error during request: %s", err)
+					}
+
+					if resp.StatusCode != tc.wantStatusCode {
+						t.Errorf("StatusCode mismatch: got %d, want %d", resp.StatusCode, tc.wantStatusCode)
 					}
 
 					// Notifications don't expect a response.
@@ -514,9 +907,34 @@ func TestMcpEndpoint(t *testing.T) {
 	}
 }
 
+func TestInvalidProtocolVersionHeader(t *testing.T) {
+	r, shutdown := setUpServer(t, "mcp", nil, nil, nil, nil)
+	defer shutdown()
+	ts := runServer(r, false)
+	defer ts.Close()
+
+	header := map[string]string{}
+	header["MCP-Protocol-Version"] = "foo"
+
+	resp, body, err := runRequest(ts, http.MethodPost, "/", nil, header)
+	if resp.Status != "400 Bad Request" {
+		t.Fatalf("unexpected status: %s", resp.Status)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("unexpected error unmarshalling body: %s", err)
+	}
+	want := "invalid protocol version: foo"
+	if got["error"] != want {
+		t.Fatalf("unexpected error message: got %s, want %s", got["error"], want)
+	}
+	if err != nil {
+		t.Fatalf("unexpected error during request: %s", err)
+	}
+}
+
 func TestDeleteEndpoint(t *testing.T) {
-	toolsMap, toolsets := map[string]tools.Tool{}, map[string]tools.Toolset{}
-	r, shutdown := setUpServer(t, "mcp", toolsMap, toolsets)
+	r, shutdown := setUpServer(t, "mcp", nil, nil, nil, nil)
 	defer shutdown()
 	ts := runServer(r, false)
 	defer ts.Close()
@@ -531,8 +949,7 @@ func TestDeleteEndpoint(t *testing.T) {
 }
 
 func TestGetEndpoint(t *testing.T) {
-	toolsMap, toolsets := map[string]tools.Tool{}, map[string]tools.Toolset{}
-	r, shutdown := setUpServer(t, "mcp", toolsMap, toolsets)
+	r, shutdown := setUpServer(t, "mcp", nil, nil, nil, nil)
 	defer shutdown()
 	ts := runServer(r, false)
 	defer ts.Close()
@@ -555,7 +972,7 @@ func TestGetEndpoint(t *testing.T) {
 }
 
 func TestSseEndpoint(t *testing.T) {
-	r, shutdown := setUpServer(t, "mcp", nil, nil)
+	r, shutdown := setUpServer(t, "mcp", nil, nil, nil, nil)
 	defer shutdown()
 	ts := runServer(r, false)
 	defer ts.Close()
@@ -593,6 +1010,12 @@ func TestSseEndpoint(t *testing.T) {
 			server: ts,
 			path:   "/tool1_only/sse",
 			event:  fmt.Sprintf("event: endpoint\ndata: http://127.0.0.1:%s/mcp/tool1_only?sessionId=", tsPort),
+		},
+		{
+			name:   "promptset1",
+			server: ts,
+			path:   "/prompt1_only/sse",
+			event:  fmt.Sprintf("event: endpoint\ndata: http://127.0.0.1:%s/mcp/prompt1_only?sessionId=", tsPort),
 		},
 		{
 			name:   "basic with http proto",
@@ -670,7 +1093,8 @@ func TestStdioSession(t *testing.T) {
 	defer cancel()
 
 	mockTools := []MockTool{tool1, tool2, tool3}
-	toolsMap, toolsets := setUpResources(t, mockTools)
+	mockPrompts := []MockPrompt{prompt1, prompt2}
+	toolsMap, toolsets, promptsMap, promptsets := setUpResources(t, mockTools, mockPrompts)
 
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -700,7 +1124,7 @@ func TestStdioSession(t *testing.T) {
 
 	sseManager := newSseManager(ctx)
 
-	resourceManager := NewResourceManager(nil, nil, toolsMap, toolsets)
+	resourceManager := resources.NewResourceManager(nil, nil, nil, toolsMap, toolsets, promptsMap, promptsets)
 
 	server := &Server{
 		version:         fakeVersionString,

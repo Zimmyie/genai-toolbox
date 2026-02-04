@@ -16,20 +16,21 @@ package dgraph
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	yaml "github.com/goccy/go-yaml"
+	"github.com/googleapis/genai-toolbox/internal/embeddingmodels"
 	"github.com/googleapis/genai-toolbox/internal/sources"
 	"github.com/googleapis/genai-toolbox/internal/sources/dgraph"
 	"github.com/googleapis/genai-toolbox/internal/tools"
+	"github.com/googleapis/genai-toolbox/internal/util/parameters"
 )
 
-const kind string = "dgraph-dql"
+const resourceType string = "dgraph-dql"
 
 func init() {
-	if !tools.Register(kind, newConfig) {
-		panic(fmt.Sprintf("tool kind %q already registered", kind))
+	if !tools.Register(resourceType, newConfig) {
+		panic(fmt.Sprintf("tool type %q already registered", resourceType))
 	}
 }
 
@@ -43,63 +44,36 @@ func newConfig(ctx context.Context, name string, decoder *yaml.Decoder) (tools.T
 
 type compatibleSource interface {
 	DgraphClient() *dgraph.DgraphClient
+	RunSQL(string, parameters.ParamValues, bool, string) (any, error)
 }
 
-// validate compatible sources are still compatible
-var _ compatibleSource = &dgraph.Source{}
-
-var compatibleSources = [...]string{dgraph.SourceKind}
-
 type Config struct {
-	Name         string           `yaml:"name" validate:"required"`
-	Kind         string           `yaml:"kind" validate:"required"`
-	Source       string           `yaml:"source" validate:"required"`
-	Description  string           `yaml:"description" validate:"required"`
-	Statement    string           `yaml:"statement" validate:"required"`
-	AuthRequired []string         `yaml:"authRequired"`
-	IsQuery      bool             `yaml:"isQuery"`
-	Timeout      string           `yaml:"timeout"`
-	Parameters   tools.Parameters `yaml:"parameters"`
+	Name         string                `yaml:"name" validate:"required"`
+	Type         string                `yaml:"type" validate:"required"`
+	Source       string                `yaml:"source" validate:"required"`
+	Description  string                `yaml:"description" validate:"required"`
+	Statement    string                `yaml:"statement" validate:"required"`
+	AuthRequired []string              `yaml:"authRequired"`
+	IsQuery      bool                  `yaml:"isQuery"`
+	Timeout      string                `yaml:"timeout"`
+	Parameters   parameters.Parameters `yaml:"parameters"`
 }
 
 // validate interface
 var _ tools.ToolConfig = Config{}
 
-func (cfg Config) ToolConfigKind() string {
-	return kind
+func (cfg Config) ToolConfigType() string {
+	return resourceType
 }
 
 func (cfg Config) Initialize(srcs map[string]sources.Source) (tools.Tool, error) {
-	// verify source exists
-	rawS, ok := srcs[cfg.Source]
-	if !ok {
-		return nil, fmt.Errorf("no source named %q configured", cfg.Source)
-	}
-
-	// verify the source is compatible
-	s, ok := rawS.(compatibleSource)
-	if !ok {
-		return nil, fmt.Errorf("invalid source for %q tool: source kind must be one of %q", kind, compatibleSources)
-	}
-
-	mcpManifest := tools.McpManifest{
-		Name:        cfg.Name,
-		Description: cfg.Description,
-		InputSchema: cfg.Parameters.McpManifest(),
-	}
+	mcpManifest := tools.GetMcpManifest(cfg.Name, cfg.Description, cfg.AuthRequired, cfg.Parameters, nil)
 
 	// finish tool setup
 	t := Tool{
-		Name:         cfg.Name,
-		Kind:         kind,
-		Parameters:   cfg.Parameters,
-		Statement:    cfg.Statement,
-		AuthRequired: cfg.AuthRequired,
-		DgraphClient: s.DgraphClient(),
-		IsQuery:      cfg.IsQuery,
-		Timeout:      cfg.Timeout,
-		manifest:     tools.Manifest{Description: cfg.Description, Parameters: cfg.Parameters.Manifest(), AuthRequired: cfg.AuthRequired},
-		mcpManifest:  mcpManifest,
+		Config:      cfg,
+		manifest:    tools.Manifest{Description: cfg.Description, Parameters: cfg.Parameters.Manifest(), AuthRequired: cfg.AuthRequired},
+		mcpManifest: mcpManifest,
 	}
 	return t, nil
 }
@@ -108,45 +82,25 @@ func (cfg Config) Initialize(srcs map[string]sources.Source) (tools.Tool, error)
 var _ tools.Tool = Tool{}
 
 type Tool struct {
-	Name         string           `yaml:"name"`
-	Kind         string           `yaml:"kind"`
-	Parameters   tools.Parameters `yaml:"parameters"`
-	AuthRequired []string         `yaml:"authRequired"`
-	DgraphClient *dgraph.DgraphClient
-	IsQuery      bool
-	Timeout      string
-	Statement    string
-	manifest     tools.Manifest
-	mcpManifest  tools.McpManifest
+	Config
+	manifest    tools.Manifest
+	mcpManifest tools.McpManifest
 }
 
-func (t Tool) Invoke(ctx context.Context, params tools.ParamValues) ([]any, error) {
-	paramsMap := params.AsMapWithDollarPrefix()
+func (t Tool) ToConfig() tools.ToolConfig {
+	return t.Config
+}
 
-	resp, err := t.DgraphClient.ExecuteQuery(t.Statement, paramsMap, t.IsQuery, t.Timeout)
+func (t Tool) Invoke(ctx context.Context, resourceMgr tools.SourceProvider, params parameters.ParamValues, accessToken tools.AccessToken) (any, error) {
+	source, err := tools.GetCompatibleSource[compatibleSource](resourceMgr, t.Source, t.Name, t.Type)
 	if err != nil {
 		return nil, err
 	}
-
-	if err := dgraph.CheckError(resp); err != nil {
-		return nil, err
-	}
-
-	var out []any
-	var result struct {
-		Data map[string]interface{} `json:"data"`
-	}
-
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return nil, fmt.Errorf("error parsing JSON: %v", err)
-	}
-	out = append(out, result.Data)
-
-	return out, nil
+	return source.RunSQL(t.Statement, params, t.IsQuery, t.Timeout)
 }
 
-func (t Tool) ParseParams(data map[string]any, claimsMap map[string]map[string]any) (tools.ParamValues, error) {
-	return tools.ParseParams(t.Parameters, data, claimsMap)
+func (t Tool) EmbedParams(ctx context.Context, paramValues parameters.ParamValues, embeddingModelsMap map[string]embeddingmodels.EmbeddingModel) (parameters.ParamValues, error) {
+	return parameters.EmbedParams(ctx, t.Parameters, paramValues, embeddingModelsMap, nil)
 }
 
 func (t Tool) Manifest() tools.Manifest {
@@ -159,4 +113,16 @@ func (t Tool) McpManifest() tools.McpManifest {
 
 func (t Tool) Authorized(verifiedAuthServices []string) bool {
 	return tools.IsAuthorized(t.AuthRequired, verifiedAuthServices)
+}
+
+func (t Tool) RequiresClientAuthorization(resourceMgr tools.SourceProvider) (bool, error) {
+	return false, nil
+}
+
+func (t Tool) GetAuthTokenHeaderName(resourceMgr tools.SourceProvider) (string, error) {
+	return "Authorization", nil
+}
+
+func (t Tool) GetParameters() parameters.Parameters {
+	return t.Parameters
 }

@@ -20,15 +20,20 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/go-chi/httplog/v2"
 	"github.com/googleapis/genai-toolbox/internal/auth"
+	"github.com/googleapis/genai-toolbox/internal/embeddingmodels"
 	"github.com/googleapis/genai-toolbox/internal/log"
+	"github.com/googleapis/genai-toolbox/internal/prompts"
+	"github.com/googleapis/genai-toolbox/internal/server/resources"
 	"github.com/googleapis/genai-toolbox/internal/sources"
 	"github.com/googleapis/genai-toolbox/internal/telemetry"
 	"github.com/googleapis/genai-toolbox/internal/tools"
@@ -46,91 +51,24 @@ type Server struct {
 	logger          log.Logger
 	instrumentation *telemetry.Instrumentation
 	sseManager      *sseManager
-	ResourceMgr     *ResourceManager
-}
-
-// ResourceManager contains available resources for the server. Should be initialized with NewResourceManager().
-type ResourceManager struct {
-	mu           sync.RWMutex
-	sources      map[string]sources.Source
-	authServices map[string]auth.AuthService
-	tools        map[string]tools.Tool
-	toolsets     map[string]tools.Toolset
-}
-
-func NewResourceManager(
-	sourcesMap map[string]sources.Source,
-	authServicesMap map[string]auth.AuthService,
-	toolsMap map[string]tools.Tool, toolsetsMap map[string]tools.Toolset,
-) *ResourceManager {
-	resourceMgr := &ResourceManager{
-		mu:           sync.RWMutex{},
-		sources:      sourcesMap,
-		authServices: authServicesMap,
-		tools:        toolsMap,
-		toolsets:     toolsetsMap,
-	}
-
-	return resourceMgr
-}
-
-func (r *ResourceManager) GetSource(sourceName string) (sources.Source, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	source, ok := r.sources[sourceName]
-	return source, ok
-}
-
-func (r *ResourceManager) GetAuthService(authServiceName string) (auth.AuthService, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	authService, ok := r.authServices[authServiceName]
-	return authService, ok
-}
-
-func (r *ResourceManager) GetTool(toolName string) (tools.Tool, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	tool, ok := r.tools[toolName]
-	return tool, ok
-}
-
-func (r *ResourceManager) GetToolset(toolsetName string) (tools.Toolset, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	toolset, ok := r.toolsets[toolsetName]
-	return toolset, ok
-}
-
-func (r *ResourceManager) SetResources(sourcesMap map[string]sources.Source, authServicesMap map[string]auth.AuthService, toolsMap map[string]tools.Tool, toolsetsMap map[string]tools.Toolset) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.sources = sourcesMap
-	r.authServices = authServicesMap
-	r.tools = toolsMap
-	r.toolsets = toolsetsMap
-}
-
-func (r *ResourceManager) GetAuthServiceMap() map[string]auth.AuthService {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.authServices
-}
-
-func (r *ResourceManager) GetToolsMap() map[string]tools.Tool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.tools
+	ResourceMgr     *resources.ResourceManager
 }
 
 func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 	map[string]sources.Source,
 	map[string]auth.AuthService,
+	map[string]embeddingmodels.EmbeddingModel,
 	map[string]tools.Tool,
 	map[string]tools.Toolset,
+	map[string]prompts.Prompt,
+	map[string]prompts.Promptset,
 	error,
 ) {
-	ctx = util.WithUserAgent(ctx, cfg.Version)
+	metadataStr := cfg.Version
+	if len(cfg.UserAgentMetadata) > 0 {
+		metadataStr += "+" + strings.Join(cfg.UserAgentMetadata, "+")
+	}
+	ctx = util.WithUserAgent(ctx, metadataStr)
 	instrumentation, err := util.InstrumentationFromContext(ctx)
 	if err != nil {
 		panic(err)
@@ -148,7 +86,7 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 			childCtx, span := instrumentation.Tracer.Start(
 				ctx,
 				"toolbox/server/source/init",
-				trace.WithAttributes(attribute.String("source_kind", sc.SourceConfigKind())),
+				trace.WithAttributes(attribute.String("source_type", sc.SourceConfigType())),
 				trace.WithAttributes(attribute.String("source_name", name)),
 			)
 			defer span.End()
@@ -159,11 +97,15 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 			return s, nil
 		}()
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 		sourcesMap[name] = s
 	}
-	l.InfoContext(ctx, fmt.Sprintf("Initialized %d sources.", len(sourcesMap)))
+	sourceNames := make([]string, 0, len(sourcesMap))
+	for name := range sourcesMap {
+		sourceNames = append(sourceNames, name)
+	}
+	l.InfoContext(ctx, fmt.Sprintf("Initialized %d sources: %s", len(sourcesMap), strings.Join(sourceNames, ", ")))
 
 	// initialize and validate the auth services from configs
 	authServicesMap := make(map[string]auth.AuthService)
@@ -172,7 +114,7 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 			_, span := instrumentation.Tracer.Start(
 				ctx,
 				"toolbox/server/auth/init",
-				trace.WithAttributes(attribute.String("auth_kind", sc.AuthServiceConfigKind())),
+				trace.WithAttributes(attribute.String("auth_type", sc.AuthServiceConfigType())),
 				trace.WithAttributes(attribute.String("auth_name", name)),
 			)
 			defer span.End()
@@ -183,11 +125,43 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 			return a, nil
 		}()
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 		authServicesMap[name] = a
 	}
-	l.InfoContext(ctx, fmt.Sprintf("Initialized %d authServices.", len(authServicesMap)))
+	authServiceNames := make([]string, 0, len(authServicesMap))
+	for name := range authServicesMap {
+		authServiceNames = append(authServiceNames, name)
+	}
+	l.InfoContext(ctx, fmt.Sprintf("Initialized %d authServices: %s", len(authServicesMap), strings.Join(authServiceNames, ", ")))
+
+	// Initialize and validate embedding models from configs.
+	embeddingModelsMap := make(map[string]embeddingmodels.EmbeddingModel)
+	for name, ec := range cfg.EmbeddingModelConfigs {
+		em, err := func() (embeddingmodels.EmbeddingModel, error) {
+			_, span := instrumentation.Tracer.Start(
+				ctx,
+				"toolbox/server/embeddingmodel/init",
+				trace.WithAttributes(attribute.String("model_type", ec.EmbeddingModelConfigType())),
+				trace.WithAttributes(attribute.String("model_name", name)),
+			)
+			defer span.End()
+			em, err := ec.Initialize(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("unable to initialize embedding model %q: %w", name, err)
+			}
+			return em, nil
+		}()
+		if err != nil {
+			return nil, nil, nil, nil, nil, nil, nil, err
+		}
+		embeddingModelsMap[name] = em
+	}
+	embeddingModelNames := make([]string, 0, len(embeddingModelsMap))
+	for name := range embeddingModelsMap {
+		embeddingModelNames = append(embeddingModelNames, name)
+	}
+	l.InfoContext(ctx, fmt.Sprintf("Initialized %d embeddingModels: %s", len(embeddingModelsMap), strings.Join(embeddingModelNames, ", ")))
 
 	// initialize and validate the tools from configs
 	toolsMap := make(map[string]tools.Tool)
@@ -196,7 +170,7 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 			_, span := instrumentation.Tracer.Start(
 				ctx,
 				"toolbox/server/tool/init",
-				trace.WithAttributes(attribute.String("tool_kind", tc.ToolConfigKind())),
+				trace.WithAttributes(attribute.String("tool_type", tc.ToolConfigType())),
 				trace.WithAttributes(attribute.String("tool_name", name)),
 			)
 			defer span.End()
@@ -207,11 +181,15 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 			return t, nil
 		}()
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 		toolsMap[name] = t
 	}
-	l.InfoContext(ctx, fmt.Sprintf("Initialized %d tools.", len(toolsMap)))
+	toolNames := make([]string, 0, len(toolsMap))
+	for name := range toolsMap {
+		toolNames = append(toolNames, name)
+	}
+	l.InfoContext(ctx, fmt.Sprintf("Initialized %d tools: %s", len(toolsMap), strings.Join(toolNames, ", ")))
 
 	// create a default toolset that contains all tools
 	allToolNames := make([]string, 0, len(toolsMap))
@@ -240,13 +218,109 @@ func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
 			return t, err
 		}()
 		if err != nil {
-			return nil, nil, nil, nil, err
+			return nil, nil, nil, nil, nil, nil, nil, err
 		}
 		toolsetsMap[name] = t
 	}
-	l.InfoContext(ctx, fmt.Sprintf("Initialized %d toolsets.", len(toolsetsMap)))
+	toolsetNames := make([]string, 0, len(toolsetsMap))
+	for name := range toolsetsMap {
+		if name == "" {
+			toolsetNames = append(toolsetNames, "default")
+		} else {
+			toolsetNames = append(toolsetNames, name)
+		}
+	}
+	l.InfoContext(ctx, fmt.Sprintf("Initialized %d toolsets: %s", len(toolsetsMap), strings.Join(toolsetNames, ", ")))
 
-	return sourcesMap, authServicesMap, toolsMap, toolsetsMap, nil
+	// initialize and validate the prompts from configs
+	promptsMap := make(map[string]prompts.Prompt)
+	for name, pc := range cfg.PromptConfigs {
+		p, err := func() (prompts.Prompt, error) {
+			_, span := instrumentation.Tracer.Start(
+				ctx,
+				"toolbox/server/prompt/init",
+				trace.WithAttributes(attribute.String("prompt_type", pc.PromptConfigType())),
+				trace.WithAttributes(attribute.String("prompt_name", name)),
+			)
+			defer span.End()
+			p, err := pc.Initialize()
+			if err != nil {
+				return nil, fmt.Errorf("unable to initialize prompt %q: %w", name, err)
+			}
+			return p, nil
+		}()
+		if err != nil {
+			return nil, nil, nil, nil, nil, nil, nil, err
+		}
+		promptsMap[name] = p
+	}
+	promptNames := make([]string, 0, len(promptsMap))
+	for name := range promptsMap {
+		promptNames = append(promptNames, name)
+	}
+	l.InfoContext(ctx, fmt.Sprintf("Initialized %d prompts: %s", len(promptsMap), strings.Join(promptNames, ", ")))
+
+	// create a default promptset that contains all prompts
+	allPromptNames := make([]string, 0, len(promptsMap))
+	for name := range promptsMap {
+		allPromptNames = append(allPromptNames, name)
+	}
+	if cfg.PromptsetConfigs == nil {
+		cfg.PromptsetConfigs = make(PromptsetConfigs)
+	}
+	cfg.PromptsetConfigs[""] = prompts.PromptsetConfig{Name: "", PromptNames: allPromptNames}
+
+	// initialize and validate the promptsets from configs
+	promptsetsMap := make(map[string]prompts.Promptset)
+	for name, pc := range cfg.PromptsetConfigs {
+		p, err := func() (prompts.Promptset, error) {
+			_, span := instrumentation.Tracer.Start(
+				ctx,
+				"toolbox/server/prompset/init",
+				trace.WithAttributes(attribute.String("prompset_name", name)),
+			)
+			defer span.End()
+			p, err := pc.Initialize(cfg.Version, promptsMap)
+			if err != nil {
+				return prompts.Promptset{}, fmt.Errorf("unable to initialize promptset %q: %w", name, err)
+			}
+			return p, err
+		}()
+		if err != nil {
+			return nil, nil, nil, nil, nil, nil, nil, err
+		}
+		promptsetsMap[name] = p
+	}
+	promptsetNames := make([]string, 0, len(promptsetsMap))
+	for name := range promptsetsMap {
+		if name == "" {
+			promptsetNames = append(promptsetNames, "default")
+		} else {
+			promptsetNames = append(promptsetNames, name)
+		}
+	}
+	l.InfoContext(ctx, fmt.Sprintf("Initialized %d promptsets: %s", len(promptsetsMap), strings.Join(promptsetNames, ", ")))
+
+	return sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, toolsetsMap, promptsMap, promptsetsMap, nil
+}
+
+func hostCheck(allowedHosts map[string]struct{}) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, hasWildcard := allowedHosts["*"]
+			hostname := r.Host
+			if host, _, err := net.SplitHostPort(r.Host); err == nil {
+				hostname = host
+			}
+			_, hostIsAllowed := allowedHosts[hostname]
+			if !hasWildcard && !hostIsAllowed {
+				// Return 403 Forbidden to block the attack
+				http.Error(w, "Invalid Host header", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // NewServer returns a Server object based on provided Config.
@@ -267,6 +341,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	// set up http serving
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
+
 	// logging
 	logLevel, err := log.SeverityToLevel(cfg.LogLevel.String())
 	if err != nil {
@@ -298,7 +373,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	httpLogger := httplog.NewLogger("httplog", httpOpts)
 	r.Use(httplog.RequestLogger(httpLogger))
 
-	sourcesMap, authServicesMap, toolsMap, toolsetsMap, err := InitializeConfigs(ctx, cfg)
+	sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, toolsetsMap, promptsMap, promptsetsMap, err := InitializeConfigs(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize configs: %w", err)
 	}
@@ -308,7 +383,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 
 	sseManager := newSseManager(ctx)
 
-	resourceManager := NewResourceManager(sourcesMap, authServicesMap, toolsMap, toolsetsMap)
+	resourceManager := resources.NewResourceManager(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, toolsetsMap, promptsMap, promptsetsMap)
 
 	s := &Server{
 		version:         cfg.Version,
@@ -319,6 +394,34 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		sseManager:      sseManager,
 		ResourceMgr:     resourceManager,
 	}
+
+	// cors
+	if slices.Contains(cfg.AllowedOrigins, "*") {
+		s.logger.WarnContext(ctx, "wildcard (`*`) allows all origin to access the resource and is not secure. Use it with cautious for public, non-sensitive data, or during local development. Recommended to use `--allowed-origins` flag")
+	}
+	corsOpts := cors.Options{
+		AllowedOrigins:   cfg.AllowedOrigins,
+		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowCredentials: true, // required since Toolbox uses auth headers
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Mcp-Session-Id", "MCP-Protocol-Version"},
+		ExposedHeaders:   []string{"Mcp-Session-Id"}, // headers that are sent to clients
+		MaxAge:           300,                        // cache preflight results for 5 minutes
+	}
+	r.Use(cors.Handler(corsOpts))
+	// validate hosts for DNS rebinding attacks
+	if slices.Contains(cfg.AllowedHosts, "*") {
+		s.logger.WarnContext(ctx, "wildcard (`*`) allows all hosts to access the resource and is not secure. Use it with cautious for public, non-sensitive data, or during local development. Recommended to use `--allowed-hosts` flag to prevent DNS rebinding attacks")
+	}
+	allowedHostsMap := make(map[string]struct{}, len(cfg.AllowedHosts))
+	for _, h := range cfg.AllowedHosts {
+		hostname := h
+		if host, _, err := net.SplitHostPort(h); err == nil {
+			hostname = host
+		}
+		allowedHostsMap[hostname] = struct{}{}
+	}
+	r.Use(hostCheck(allowedHostsMap))
+
 	// control plane
 	apiR, err := apiRouter(s)
 	if err != nil {
@@ -330,6 +433,13 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		return nil, err
 	}
 	r.Mount("/mcp", mcpR)
+	if cfg.UI {
+		webR, err := webRouter()
+		if err != nil {
+			return nil, err
+		}
+		r.Mount("/ui", webR)
+	}
 	// default endpoint for validating server is running
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("🧰 Hello, World! 🧰"))

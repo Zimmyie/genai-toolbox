@@ -1,9 +1,9 @@
 ---
 title: "Quickstart (MCP)"
 type: docs
-weight: 3
+weight: 5
 description: >
-  How to get started running Toolbox locally with MCP Inspector. 
+  How to get started running Toolbox locally with MCP Inspector.
 ---
 
 ## Overview
@@ -71,7 +71,7 @@ access by our agent, and create a database user for Toolbox to connect with.
 
     ```sql
     INSERT INTO hotels(id, name, location, price_tier, checkin_date, checkout_date, booked)
-    VALUES 
+    VALUES
       (1, 'Hilton Basel', 'Basel', 'Luxury', '2024-04-22', '2024-04-20', B'0'),
       (2, 'Marriott Zurich', 'Zurich', 'Upscale', '2024-04-14', '2024-04-21', B'0'),
       (3, 'Hyatt Regency Basel', 'Basel', 'Upper Upscale', '2024-04-02', '2024-04-20', B'0'),
@@ -105,7 +105,7 @@ In this section, we will download Toolbox, configure our tools in a
     <!-- {x-release-please-start-version} -->
     ```bash
     export OS="linux/amd64" # one of linux/amd64, darwin/arm64, darwin/amd64, or windows/amd64
-    curl -O https://storage.googleapis.com/genai-toolbox/v0.9.0/$OS/toolbox
+    curl -O https://storage.googleapis.com/genai-toolbox/v0.26.0/$OS/toolbox
     ```
     <!-- {x-release-please-end} -->
 
@@ -125,82 +125,93 @@ In this section, we will download Toolbox, configure our tools in a
     {{< /notice >}}
 
     ```yaml
-    sources:
-      my-pg-source:
-        kind: postgres
-        host: 127.0.0.1
-        port: 5432
-        database: toolbox_db
-        user: toolbox_user
-        password: my-password
+    kind: sources
+    name: my-pg-source
+    type: postgres
+    host: 127.0.0.1
+    port: 5432
+    database: toolbox_db
+    user: toolbox_user
+    password: my-password
+    ---
+    kind: tools
+    name: search-hotels-by-name
+    type: postgres-sql
+    source: my-pg-source
+    description: Search for hotels based on name.
+    parameters:
+      - name: name
+        type: string
+        description: The name of the hotel.
+    statement: SELECT * FROM hotels WHERE name ILIKE '%' || $1 || '%';
+    ---
+    kind: tools
+    name: search-hotels-by-location
+    type: postgres-sql
+    source: my-pg-source
+    description: Search for hotels based on location.
+    parameters:
+      - name: location
+        type: string
+        description: The location of the hotel.
+    statement: SELECT * FROM hotels WHERE location ILIKE '%' || $1 || '%';
+    ---
+    kind: tools
+    name: book-hotel
+    type: postgres-sql
+    source: my-pg-source
+    description: >-
+       Book a hotel by its ID. If the hotel is successfully booked, returns a NULL, raises an error if not.
+    parameters:
+      - name: hotel_id
+        type: string
+        description: The ID of the hotel to book.
+    statement: UPDATE hotels SET booked = B'1' WHERE id = $1;
+    ---
+    kind: tools
+    name: update-hotel
+    type: postgres-sql
+    source: my-pg-source
+    description: >-
+      Update a hotel's check-in and check-out dates by its ID. Returns a message
+      indicating  whether the hotel was successfully updated or not.
+    parameters:
+      - name: hotel_id
+        type: string
+        description: The ID of the hotel to update.
+      - name: checkin_date
+        type: string
+        description: The new check-in date of the hotel.
+      - name: checkout_date
+        type: string
+        description: The new check-out date of the hotel.
+    statement: >-
+      UPDATE hotels SET checkin_date = CAST($2 as date), checkout_date = CAST($3
+      as date) WHERE id = $1;
+    ---
+    kind: tools
+    name: cancel-hotel
+    type: postgres-sql
+    source: my-pg-source
+    description: Cancel a hotel by its ID.
+    parameters:
+      - name: hotel_id
+        type: string
+        description: The ID of the hotel to cancel.
+    statement: UPDATE hotels SET booked = B'0' WHERE id = $1;
+    ---
+    kind: toolsets
+    name: my-toolset
     tools:
-      search-hotels-by-name:
-        kind: postgres-sql
-        source: my-pg-source
-        description: Search for hotels based on name.
-        parameters:
-          - name: name
-            type: string
-            description: The name of the hotel.
-        statement: SELECT * FROM hotels WHERE name ILIKE '%' || $1 || '%';
-      search-hotels-by-location:
-        kind: postgres-sql
-        source: my-pg-source
-        description: Search for hotels based on location.
-        parameters:
-          - name: location
-            type: string
-            description: The location of the hotel.
-        statement: SELECT * FROM hotels WHERE location ILIKE '%' || $1 || '%';
-      book-hotel:
-        kind: postgres-sql
-        source: my-pg-source
-        description: >-
-           Book a hotel by its ID. If the hotel is successfully booked, returns a NULL, raises an error if not.
-        parameters:
-          - name: hotel_id
-            type: string
-            description: The ID of the hotel to book.
-        statement: UPDATE hotels SET booked = B'1' WHERE id = $1;
-      update-hotel:
-        kind: postgres-sql
-        source: my-pg-source
-        description: >-
-          Update a hotel's check-in and check-out dates by its ID. Returns a message
-          indicating  whether the hotel was successfully updated or not.
-        parameters:
-          - name: hotel_id
-            type: string
-            description: The ID of the hotel to update.
-          - name: checkin_date
-            type: string
-            description: The new check-in date of the hotel.
-          - name: checkout_date
-            type: string
-            description: The new check-out date of the hotel.
-        statement: >-
-          UPDATE hotels SET checkin_date = CAST($2 as date), checkout_date = CAST($3
-          as date) WHERE id = $1;
-      cancel-hotel:
-        kind: postgres-sql
-        source: my-pg-source
-        description: Cancel a hotel by its ID.
-        parameters:
-          - name: hotel_id
-            type: string
-            description: The ID of the hotel to cancel.
-        statement: UPDATE hotels SET booked = B'0' WHERE id = $1;
-   toolsets:
-      my-toolset:
-        - search-hotels-by-name
-        - search-hotels-by-location
-        - book-hotel
-        - update-hotel
-        - cancel-hotel
+      - search-hotels-by-name
+      - search-hotels-by-location
+      - book-hotel
+      - update-hotel
+      - cancel-hotel
     ```
 
     For more info on tools, check out the
-    [Tools](../../resources/tools/_index.md) section.
+    [Tools](../../resources/tools/) section.
 
 1. Run the Toolbox server, pointing to the `tools.yaml` file created earlier:
 
@@ -218,17 +229,27 @@ In this section, we will download Toolbox, configure our tools in a
 
 1. Type `y` when it asks to install the inspector package.
 
-1. It should show the following when the MCP Inspector is up and running:
+1. It should show the following when the MCP Inspector is up and running (please
+   take note of `<YOUR_SESSION_TOKEN>`):
 
     ```bash
-    🔍 MCP Inspector is up and running at http://127.0.0.1:5173 🚀
+    Starting MCP inspector...
+    ⚙️ Proxy server listening on localhost:6277
+    🔑 Session token: <YOUR_SESSION_TOKEN>
+       Use this token to authenticate requests or set DANGEROUSLY_OMIT_AUTH=true to disable auth
+
+    🚀 MCP Inspector is up and running at:
+       http://localhost:6274/?MCP_PROXY_AUTH_TOKEN=<YOUR_SESSION_TOKEN>
     ```
 
 1. Open the above link in your browser.
 
-1. For `Transport Type`, select `SSE`.
+1. For `Transport Type`, select `Streamable HTTP`.
 
-1. For `URL`, type in `http://127.0.0.1:5000/mcp/sse`.
+1. For `URL`, type in `http://127.0.0.1:5000/mcp`.
+
+1. For `Configuration` -> `Proxy Session Token`, make sure
+   `<YOUR_SESSION_TOKEN>` is present.
 
 1. Click Connect.
 

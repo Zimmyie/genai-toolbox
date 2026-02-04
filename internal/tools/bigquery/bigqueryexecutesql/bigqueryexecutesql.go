@@ -16,21 +16,27 @@ package bigqueryexecutesql
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	bigqueryapi "cloud.google.com/go/bigquery"
 	yaml "github.com/goccy/go-yaml"
+	"github.com/googleapis/genai-toolbox/internal/embeddingmodels"
 	"github.com/googleapis/genai-toolbox/internal/sources"
 	bigqueryds "github.com/googleapis/genai-toolbox/internal/sources/bigquery"
 	"github.com/googleapis/genai-toolbox/internal/tools"
-	"google.golang.org/api/iterator"
+	bqutil "github.com/googleapis/genai-toolbox/internal/tools/bigquery/bigquerycommon"
+	"github.com/googleapis/genai-toolbox/internal/util"
+	"github.com/googleapis/genai-toolbox/internal/util/parameters"
+	bigqueryrestapi "google.golang.org/api/bigquery/v2"
 )
 
-const kind string = "bigquery-execute-sql"
+const resourceType string = "bigquery-execute-sql"
 
 func init() {
-	if !tools.Register(kind, newConfig) {
-		panic(fmt.Sprintf("tool kind %q already registered", kind))
+	if !tools.Register(resourceType, newConfig) {
+		panic(fmt.Sprintf("tool type %q already registered", resourceType))
 	}
 }
 
@@ -44,16 +50,18 @@ func newConfig(ctx context.Context, name string, decoder *yaml.Decoder) (tools.T
 
 type compatibleSource interface {
 	BigQueryClient() *bigqueryapi.Client
+	BigQuerySession() bigqueryds.BigQuerySessionProvider
+	BigQueryWriteMode() string
+	UseClientAuthorization() bool
+	IsDatasetAllowed(projectID, datasetID string) bool
+	BigQueryAllowedDatasets() []string
+	RetrieveClientAndService(tools.AccessToken) (*bigqueryapi.Client, *bigqueryrestapi.Service, error)
+	RunSQL(context.Context, *bigqueryapi.Client, string, string, []bigqueryapi.QueryParameter, []*bigqueryapi.ConnectionProperty) (any, error)
 }
-
-// validate compatible sources are still compatible
-var _ compatibleSource = &bigqueryds.Source{}
-
-var compatibleSources = [...]string{bigqueryds.SourceKind}
 
 type Config struct {
 	Name         string   `yaml:"name" validate:"required"`
-	Kind         string   `yaml:"kind" validate:"required"`
+	Type         string   `yaml:"type" validate:"required"`
 	Source       string   `yaml:"source" validate:"required"`
 	Description  string   `yaml:"description" validate:"required"`
 	AuthRequired []string `yaml:"authRequired"`
@@ -62,8 +70,8 @@ type Config struct {
 // validate interface
 var _ tools.ToolConfig = Config{}
 
-func (cfg Config) ToolConfigKind() string {
-	return kind
+func (cfg Config) ToolConfigType() string {
+	return resourceType
 }
 
 func (cfg Config) Initialize(srcs map[string]sources.Source) (tools.Tool, error) {
@@ -76,27 +84,56 @@ func (cfg Config) Initialize(srcs map[string]sources.Source) (tools.Tool, error)
 	// verify the source is compatible
 	s, ok := rawS.(compatibleSource)
 	if !ok {
-		return nil, fmt.Errorf("invalid source for %q tool: source kind must be one of %q", kind, compatibleSources)
+		return nil, fmt.Errorf("invalid source for %q tool: source %q not compatible", resourceType, cfg.Source)
 	}
 
-	sqlParameter := tools.NewStringParameter("sql", "The sql to execute.")
-	parameters := tools.Parameters{sqlParameter}
-
-	mcpManifest := tools.McpManifest{
-		Name:        cfg.Name,
-		Description: cfg.Description,
-		InputSchema: parameters.McpManifest(),
+	var sqlDescriptionBuilder strings.Builder
+	switch s.BigQueryWriteMode() {
+	case bigqueryds.WriteModeBlocked:
+		sqlDescriptionBuilder.WriteString("The SQL to execute. In 'blocked' mode, only SELECT statements are allowed; other statement types will fail.")
+	case bigqueryds.WriteModeProtected:
+		sqlDescriptionBuilder.WriteString("The SQL to execute. Only SELECT statements and writes to the session's temporary dataset are allowed (e.g., `CREATE TEMP TABLE ...`).")
+	default: // WriteModeAllowed
+		sqlDescriptionBuilder.WriteString("The SQL to execute.")
 	}
+
+	allowedDatasets := s.BigQueryAllowedDatasets()
+	if len(allowedDatasets) > 0 {
+		if len(allowedDatasets) == 1 {
+			datasetFQN := allowedDatasets[0]
+			parts := strings.Split(datasetFQN, ".")
+			if len(parts) < 2 {
+				return nil, fmt.Errorf("expected allowedDataset to have at least 2 parts (project.dataset): %s", datasetFQN)
+			}
+			datasetID := parts[1]
+			sqlDescriptionBuilder.WriteString(fmt.Sprintf(" The query must only access the `%s` dataset. "+
+				"To query a table within this dataset (e.g., `my_table`), "+
+				"qualify it with the dataset id (e.g., `%s.my_table`).", datasetFQN, datasetID))
+		} else {
+			datasetIDs := []string{}
+			for _, ds := range allowedDatasets {
+				datasetIDs = append(datasetIDs, fmt.Sprintf("`%s`", ds))
+			}
+			sqlDescriptionBuilder.WriteString(fmt.Sprintf(" The query must only access datasets from the following list: %s.", strings.Join(datasetIDs, ", ")))
+		}
+	}
+
+	sqlParameter := parameters.NewStringParameter("sql", sqlDescriptionBuilder.String())
+	dryRunParameter := parameters.NewBooleanParameterWithDefault(
+		"dry_run",
+		false,
+		"If set to true, the query will be validated and information about the execution will be returned "+
+			"without running the query. Defaults to false.",
+	)
+	params := parameters.Parameters{sqlParameter, dryRunParameter}
+	mcpManifest := tools.GetMcpManifest(cfg.Name, cfg.Description, cfg.AuthRequired, params, nil)
 
 	// finish tool setup
 	t := Tool{
-		Name:         cfg.Name,
-		Kind:         kind,
-		Parameters:   parameters,
-		AuthRequired: cfg.AuthRequired,
-		Client:       s.BigQueryClient(),
-		manifest:     tools.Manifest{Description: cfg.Description, Parameters: parameters.Manifest(), AuthRequired: cfg.AuthRequired},
-		mcpManifest:  mcpManifest,
+		Config:      cfg,
+		Parameters:  params,
+		manifest:    tools.Manifest{Description: cfg.Description, Parameters: params.Manifest(), AuthRequired: cfg.AuthRequired},
+		mcpManifest: mcpManifest,
 	}
 	return t, nil
 }
@@ -105,52 +142,147 @@ func (cfg Config) Initialize(srcs map[string]sources.Source) (tools.Tool, error)
 var _ tools.Tool = Tool{}
 
 type Tool struct {
-	Name         string           `yaml:"name"`
-	Kind         string           `yaml:"kind"`
-	AuthRequired []string         `yaml:"authRequired"`
-	Parameters   tools.Parameters `yaml:"parameters"`
-	Client       *bigqueryapi.Client
-	manifest     tools.Manifest
-	mcpManifest  tools.McpManifest
+	Config
+	Parameters  parameters.Parameters `yaml:"parameters"`
+	manifest    tools.Manifest
+	mcpManifest tools.McpManifest
 }
 
-func (t Tool) Invoke(ctx context.Context, params tools.ParamValues) ([]any, error) {
-	sliceParams := params.AsSlice()
-	sql, ok := sliceParams[0].(string)
-	if !ok {
-		return nil, fmt.Errorf("unable to get cast %s", sliceParams[0])
-	}
+func (t Tool) ToConfig() tools.ToolConfig {
+	return t.Config
+}
 
-	query := t.Client.Query(sql)
-	query.Location = t.Client.Location
-
-	it, err := query.Read(ctx)
+func (t Tool) Invoke(ctx context.Context, resourceMgr tools.SourceProvider, params parameters.ParamValues, accessToken tools.AccessToken) (any, error) {
+	source, err := tools.GetCompatibleSource[compatibleSource](resourceMgr, t.Source, t.Name, t.Type)
 	if err != nil {
-		return nil, fmt.Errorf("unable to execute query: %w", err)
+		return nil, err
 	}
 
-	var out []any
-	for {
-		var row map[string]bigqueryapi.Value
-		err := it.Next(&row)
-		if err == iterator.Done {
-			break
-		}
+	paramsMap := params.AsMap()
+	sql, ok := paramsMap["sql"].(string)
+	if !ok {
+		return nil, fmt.Errorf("unable to cast sql parameter %s", paramsMap["sql"])
+	}
+	dryRun, ok := paramsMap["dry_run"].(bool)
+	if !ok {
+		return nil, fmt.Errorf("unable to cast dry_run parameter %s", paramsMap["dry_run"])
+	}
+
+	bqClient, restService, err := source.RetrieveClientAndService(accessToken)
+	if err != nil {
+		return nil, err
+	}
+
+	var connProps []*bigqueryapi.ConnectionProperty
+	var session *bigqueryds.Session
+	if source.BigQueryWriteMode() == bigqueryds.WriteModeProtected {
+		session, err = source.BigQuerySession()(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("unable to iterate through query results: %w", err)
+			return nil, fmt.Errorf("failed to get BigQuery session for protected mode: %w", err)
 		}
-		vMap := make(map[string]any)
-		for key, value := range row {
-			vMap[key] = value
+		connProps = []*bigqueryapi.ConnectionProperty{
+			{Key: "session_id", Value: session.ID},
 		}
-		out = append(out, vMap)
 	}
 
-	return out, nil
+	dryRunJob, err := bqutil.DryRunQuery(ctx, restService, bqClient.Project(), bqClient.Location, sql, nil, connProps)
+	if err != nil {
+		return nil, fmt.Errorf("query validation failed: %w", err)
+	}
+
+	statementType := dryRunJob.Statistics.Query.StatementType
+
+	switch source.BigQueryWriteMode() {
+	case bigqueryds.WriteModeBlocked:
+		if statementType != "SELECT" {
+			return nil, fmt.Errorf("write mode is 'blocked', only SELECT statements are allowed")
+		}
+	case bigqueryds.WriteModeProtected:
+		if dryRunJob.Configuration != nil && dryRunJob.Configuration.Query != nil {
+			if dest := dryRunJob.Configuration.Query.DestinationTable; dest != nil && dest.DatasetId != session.DatasetID {
+				return nil, fmt.Errorf("protected write mode only supports SELECT statements, or write operations in the anonymous "+
+					"dataset of a BigQuery session, but destination was %q", dest.DatasetId)
+			}
+		}
+	}
+
+	if len(source.BigQueryAllowedDatasets()) > 0 {
+		switch statementType {
+		case "CREATE_SCHEMA", "DROP_SCHEMA", "ALTER_SCHEMA":
+			return nil, fmt.Errorf("dataset-level operations like '%s' are not allowed when dataset restrictions are in place", statementType)
+		case "CREATE_FUNCTION", "CREATE_TABLE_FUNCTION", "CREATE_PROCEDURE":
+			return nil, fmt.Errorf("creating stored routines ('%s') is not allowed when dataset restrictions are in place, as their contents cannot be safely analyzed", statementType)
+		case "CALL":
+			return nil, fmt.Errorf("calling stored procedures ('%s') is not allowed when dataset restrictions are in place, as their contents cannot be safely analyzed", statementType)
+		}
+
+		// Use a map to avoid duplicate table names.
+		tableIDSet := make(map[string]struct{})
+
+		// Get all tables from the dry run result. This is the most reliable method.
+		queryStats := dryRunJob.Statistics.Query
+		if queryStats != nil {
+			for _, tableRef := range queryStats.ReferencedTables {
+				tableIDSet[fmt.Sprintf("%s.%s.%s", tableRef.ProjectId, tableRef.DatasetId, tableRef.TableId)] = struct{}{}
+			}
+			if tableRef := queryStats.DdlTargetTable; tableRef != nil {
+				tableIDSet[fmt.Sprintf("%s.%s.%s", tableRef.ProjectId, tableRef.DatasetId, tableRef.TableId)] = struct{}{}
+			}
+			if tableRef := queryStats.DdlDestinationTable; tableRef != nil {
+				tableIDSet[fmt.Sprintf("%s.%s.%s", tableRef.ProjectId, tableRef.DatasetId, tableRef.TableId)] = struct{}{}
+			}
+		}
+
+		var tableNames []string
+		if len(tableIDSet) > 0 {
+			for tableID := range tableIDSet {
+				tableNames = append(tableNames, tableID)
+			}
+		} else if statementType != "SELECT" {
+			// If dry run yields no tables, fall back to the parser for non-SELECT statements
+			// to catch unsafe operations like EXECUTE IMMEDIATE.
+			parsedTables, parseErr := bqutil.TableParser(sql, source.BigQueryClient().Project())
+			if parseErr != nil {
+				// If parsing fails (e.g., EXECUTE IMMEDIATE), we cannot guarantee safety, so we must fail.
+				return nil, fmt.Errorf("could not parse tables from query to validate against allowed datasets: %w", parseErr)
+			}
+			tableNames = parsedTables
+		}
+
+		for _, tableID := range tableNames {
+			parts := strings.Split(tableID, ".")
+			if len(parts) == 3 {
+				projectID, datasetID := parts[0], parts[1]
+				if !source.IsDatasetAllowed(projectID, datasetID) {
+					return nil, fmt.Errorf("query accesses dataset '%s.%s', which is not in the allowed list", projectID, datasetID)
+				}
+			}
+		}
+	}
+
+	if dryRun {
+		if dryRunJob != nil {
+			jobJSON, err := json.MarshalIndent(dryRunJob, "", "  ")
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal dry run job to JSON: %w", err)
+			}
+			return string(jobJSON), nil
+		}
+		// This case should not be reached, but as a fallback, we return a message.
+		return "Dry run was requested, but no job information was returned.", nil
+	}
+
+	// Log the query executed for debugging.
+	logger, err := util.LoggerFromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error getting logger: %s", err)
+	}
+	logger.DebugContext(ctx, fmt.Sprintf("executing `%s` tool query: %s", resourceType, sql))
+	return source.RunSQL(ctx, bqClient, sql, statementType, nil, connProps)
 }
 
-func (t Tool) ParseParams(data map[string]any, claims map[string]map[string]any) (tools.ParamValues, error) {
-	return tools.ParseParams(t.Parameters, data, claims)
+func (t Tool) EmbedParams(ctx context.Context, paramValues parameters.ParamValues, embeddingModelsMap map[string]embeddingmodels.EmbeddingModel) (parameters.ParamValues, error) {
+	return parameters.EmbedParams(ctx, t.Parameters, paramValues, embeddingModelsMap, nil)
 }
 
 func (t Tool) Manifest() tools.Manifest {
@@ -163,4 +295,20 @@ func (t Tool) McpManifest() tools.McpManifest {
 
 func (t Tool) Authorized(verifiedAuthServices []string) bool {
 	return tools.IsAuthorized(t.AuthRequired, verifiedAuthServices)
+}
+
+func (t Tool) RequiresClientAuthorization(resourceMgr tools.SourceProvider) (bool, error) {
+	source, err := tools.GetCompatibleSource[compatibleSource](resourceMgr, t.Source, t.Name, t.Type)
+	if err != nil {
+		return false, err
+	}
+	return source.UseClientAuthorization(), nil
+}
+
+func (t Tool) GetAuthTokenHeaderName(resourceMgr tools.SourceProvider) (string, error) {
+	return "Authorization", nil
+}
+
+func (t Tool) GetParameters() parameters.Parameters {
+	return t.Parameters
 }

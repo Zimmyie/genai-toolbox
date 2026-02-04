@@ -18,21 +18,31 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"slices"
 
+	"github.com/googleapis/genai-toolbox/internal/prompts"
 	"github.com/googleapis/genai-toolbox/internal/server/mcp/jsonrpc"
 	mcputil "github.com/googleapis/genai-toolbox/internal/server/mcp/util"
 	v20241105 "github.com/googleapis/genai-toolbox/internal/server/mcp/v20241105"
 	v20250326 "github.com/googleapis/genai-toolbox/internal/server/mcp/v20250326"
+	v20250618 "github.com/googleapis/genai-toolbox/internal/server/mcp/v20250618"
+	v20251125 "github.com/googleapis/genai-toolbox/internal/server/mcp/v20251125"
+	"github.com/googleapis/genai-toolbox/internal/server/resources"
 	"github.com/googleapis/genai-toolbox/internal/tools"
 )
 
 // LATEST_PROTOCOL_VERSION is the latest version of the MCP protocol supported.
 // Update the version used in InitializeResponse when this value is updated.
-const LATEST_PROTOCOL_VERSION = v20250326.PROTOCOL_VERSION
+const LATEST_PROTOCOL_VERSION = v20251125.PROTOCOL_VERSION
 
 // SUPPORTED_PROTOCOL_VERSIONS is the MCP protocol versions that are supported.
-var SUPPORTED_PROTOCOL_VERSIONS = []string{v20241105.PROTOCOL_VERSION, v20250326.PROTOCOL_VERSION}
+var SUPPORTED_PROTOCOL_VERSIONS = []string{
+	v20241105.PROTOCOL_VERSION,
+	v20250326.PROTOCOL_VERSION,
+	v20250618.PROTOCOL_VERSION,
+	v20251125.PROTOCOL_VERSION,
+}
 
 // InitializeResponse runs capability negotiation and protocol version agreement.
 // This is the Initialization phase of the lifecycle for MCP client-server connections.
@@ -53,15 +63,21 @@ func InitializeResponse(ctx context.Context, id jsonrpc.RequestId, body []byte, 
 	}
 
 	toolsListChanged := false
+	promptsListChanged := false
 	result := mcputil.InitializeResult{
 		ProtocolVersion: protocolVersion,
 		Capabilities: mcputil.ServerCapabilities{
 			Tools: &mcputil.ListChanged{
 				ListChanged: &toolsListChanged,
 			},
+			Prompts: &mcputil.ListChanged{
+				ListChanged: &promptsListChanged,
+			},
 		},
 		ServerInfo: mcputil.Implementation{
-			Name:    mcputil.SERVER_NAME,
+			BaseMetadata: mcputil.BaseMetadata{
+				Name: mcputil.SERVER_NAME,
+			},
 			Version: toolboxVersion,
 		},
 	}
@@ -86,14 +102,20 @@ func NotificationHandler(ctx context.Context, body []byte) error {
 
 // ProcessMethod returns a response for the request.
 // This is the Operation phase of the lifecycle for MCP client-server connections.
-func ProcessMethod(ctx context.Context, mcpVersion string, id jsonrpc.RequestId, method string, toolset tools.Toolset, tools map[string]tools.Tool, body []byte) (any, error) {
+func ProcessMethod(ctx context.Context, mcpVersion string, id jsonrpc.RequestId, method string, toolset tools.Toolset, promptset prompts.Promptset, resourceMgr *resources.ResourceManager, body []byte, header http.Header) (any, error) {
 	switch mcpVersion {
+	case v20251125.PROTOCOL_VERSION:
+		return v20251125.ProcessMethod(ctx, id, method, toolset, promptset, resourceMgr, body, header)
+	case v20250618.PROTOCOL_VERSION:
+		return v20250618.ProcessMethod(ctx, id, method, toolset, promptset, resourceMgr, body, header)
 	case v20250326.PROTOCOL_VERSION:
-		return v20250326.ProcessMethod(ctx, id, method, toolset, tools, body)
-	case v20241105.PROTOCOL_VERSION:
-		return v20241105.ProcessMethod(ctx, id, method, toolset, tools, body)
+		return v20250326.ProcessMethod(ctx, id, method, toolset, promptset, resourceMgr, body, header)
 	default:
-		err := fmt.Errorf("invalid protocol version: %s", mcpVersion)
-		return jsonrpc.NewError(id, jsonrpc.INVALID_REQUEST, err.Error(), nil), err
+		return v20241105.ProcessMethod(ctx, id, method, toolset, promptset, resourceMgr, body, header)
 	}
+}
+
+// VerifyProtocolVersion verifies if the version string is valid.
+func VerifyProtocolVersion(version string) bool {
+	return slices.Contains(SUPPORTED_PROTOCOL_VERSIONS, version)
 }

@@ -3,7 +3,7 @@ title: "Telemetry"
 type: docs
 weight: 2
 description: >
-  An overview of telemetry and observability in Toolbox. 
+  An overview of telemetry and observability in Toolbox.
 ---
 
 ## About
@@ -64,7 +64,7 @@ The structured logging outputs log as JSON:
   "timestamp":"2024-11-04T16:45:11.987299-08:00",
   "severity":"ERROR",
   "logging.googleapis.com/sourceLocation":{...},
-  "message":"unable to parse tool file at \"tools.yaml\": \"cloud-sql-postgres1\" is not a valid kind of data source"
+  "message":"unable to parse tool file at \"tools.yaml\": \"cloud-sql-postgres1\" is not a valid type of data source"
 }
 ```
 
@@ -158,7 +158,7 @@ enabled:
 
 - [Cloud Logging API](https://cloud.google.com/logging/docs/api/enable-api)
 - [Cloud Monitoring API](https://cloud.google.com/monitoring/api/enable-api)
-- [Cloud Trace API](https://cloud.google.com/apis/enableflow?apiid=cloudtrace.googleapis.com)
+- [Cloud Trace API](https://console.cloud.google.com/apis/enableflow?apiid=cloudtrace.googleapis.com)
 {{< /notice >}}
 
 #### OTLP Exporter
@@ -177,17 +177,17 @@ It receives telemetry data, transforms it, and then exports data to backends
 that can store it permanently. Toolbox provide an option to export telemetry
 data to user's choice of backend(s) that are compatible with the Open Telemetry
 Protocol (OTLP). If you would like to use a collector, please refer to this
-[Export Telemetry using the Otel Collector](../how-to/export_telemetry.md).
+[Export Telemetry using the Otel Collector](../../how-to/export_telemetry.md).
 
 ### Flags
 
 The following flags are used to determine Toolbox's telemetry configuration:
 
-| **flag**                   | **type** | **description**                                                                                                |
-|----------------------------|----------|----------------------------------------------------------------------------------------------------------------|
-| `--telemetry-gcp`          | bool     | Enable exporting directly to Google Cloud Monitoring. Default is `false`.                                      |
-| `--telemetry-otlp`         | string   | Enable exporting using OpenTelemetry Protocol (OTLP) to the specified endpoint (e.g. "<http://127.0.0.1:4318>"). |
-| `--telemetry-service-name` | string   | Sets the value of the `service.name` resource attribute. Default is `toolbox`.                                 |
+| **flag**                   | **type** | **description**                                                                                                                                                                                           |
+|----------------------------|----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--telemetry-gcp`          | bool     | Enable exporting directly to Google Cloud Monitoring. Default is `false`.                                                                                                                                 |
+| `--telemetry-otlp`         | string   | Enable exporting using OpenTelemetry Protocol (OTLP) to the specified endpoint (e.g. "127.0.0.1:4318"). To pass an insecure endpoint here, set environment variable `OTEL_EXPORTER_OTLP_INSECURE=true`. |
+| `--telemetry-service-name` | string   | Sets the value of the `service.name` resource attribute. Default is `toolbox`.                                                                                                                            |
 
 In addition to the flags noted above, you can also make additional configuration
 for OpenTelemetry via the [General SDK Configuration][sdk-configuration] through
@@ -207,5 +207,5 @@ To enable Google Cloud Exporter:
 To enable OTLP Exporter, provide Collector endpoint:
 
 ```bash
-./toolbox --telemetry-otlp="http://127.0.0.1:4553"
+./toolbox --telemetry-otlp="127.0.0.1:4553"
 ```
