@@ -33,6 +33,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	yaml "github.com/goccy/go-yaml"
 	"github.com/googleapis/genai-toolbox/internal/auth"
+	"github.com/googleapis/genai-toolbox/internal/chats"
 	"github.com/googleapis/genai-toolbox/internal/log"
 	"github.com/googleapis/genai-toolbox/internal/prebuiltconfigs"
 	"github.com/googleapis/genai-toolbox/internal/server"
@@ -185,9 +186,11 @@ func NewCommand(opts ...Option) *Command {
 	flags.StringVar(&cmd.prebuiltConfig, "prebuilt", "", "Use a prebuilt tool configuration by source type. Cannot be used with --tools-file. Allowed: 'alloydb-postgres', 'bigquery', 'cloud-sql-mysql', 'cloud-sql-postgres', 'cloud-sql-mssql', 'postgres', 'spanner', 'spanner-postgres'.")
 	flags.BoolVar(&cmd.cfg.Stdio, "stdio", false, "Listens via MCP STDIO instead of acting as a remote HTTP server.")
 	flags.BoolVar(&cmd.cfg.DisableReload, "disable-reload", false, "Disables dynamic reloading of tools file.")
+	flags.StringVar(&cmd.cfg.ChatStorageDir, "chat-storage-dir", "", "Directory to store chat transcripts for export.")
 
 	// wrap RunE command so that we have access to original Command object
 	cmd.RunE = func(*cobra.Command, []string) error { return run(cmd) }
+	baseCmd.AddCommand(newExportChatsCommand(cmd))
 
 	return cmd
 }
@@ -574,6 +577,32 @@ func resolveWatcherInputs(toolsFile string, toolsFiles []string, toolsFolder str
 	}
 
 	return watchDirs, watchedFiles
+}
+
+func newExportChatsCommand(cmd *Command) *cobra.Command {
+	var outputPath string
+
+	exportCmd := &cobra.Command{
+		Use:   "export-chats",
+		Short: "Export all chats (active and archived) to a JSON file.",
+		RunE: func(c *cobra.Command, args []string) error {
+			if strings.TrimSpace(outputPath) == "" {
+				return fmt.Errorf("output path is required")
+			}
+			if strings.TrimSpace(cmd.cfg.ChatStorageDir) == "" {
+				return fmt.Errorf("chat storage is not configured; set --chat-storage-dir")
+			}
+			store, err := chats.NewStore(cmd.cfg.ChatStorageDir)
+			if err != nil {
+				return err
+			}
+			return store.ExportAll(c.Context(), outputPath)
+		},
+	}
+
+	exportCmd.Flags().StringVarP(&outputPath, "output", "o", "", "Path to write the exported chat JSON file.")
+
+	return exportCmd
 }
 
 func run(cmd *Command) error {

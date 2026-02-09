@@ -113,18 +113,25 @@ type stdioSession struct {
 	server   *Server
 	reader   *bufio.Reader
 	writer   io.Writer
+	session  string
 }
 
 func NewStdioSession(s *Server, stdin io.Reader, stdout io.Writer) *stdioSession {
 	stdioSession := &stdioSession{
-		server: s,
-		reader: bufio.NewReader(stdin),
-		writer: stdout,
+		server:  s,
+		reader:  bufio.NewReader(stdin),
+		writer:  stdout,
+		session: uuid.New().String(),
 	}
 	return stdioSession
 }
 
 func (s *stdioSession) Start(ctx context.Context) error {
+	defer func() {
+		if s.server.chatStore != nil {
+			_ = s.server.chatStore.ArchiveSession(s.session)
+		}
+	}()
 	return s.readInputStream(ctx)
 }
 
@@ -141,7 +148,9 @@ func (s *stdioSession) readInputStream(ctx context.Context) error {
 			}
 			return err
 		}
-		v, res, err := processMcpMessage(ctx, []byte(line), s.server, s.protocol, "")
+		body := []byte(line)
+		s.server.recordChatMessage(ctx, s.session, "", body)
+		v, res, err := processMcpMessage(ctx, body, s.server, s.protocol, "")
 		if err != nil {
 			// errors during the processing of message will generate a valid MCP Error response.
 			// server can continue to run.
@@ -205,6 +214,7 @@ func (s *stdioSession) readLine(ctx context.Context) (string, error) {
 // write writes to stdout with response to client
 func (s *stdioSession) write(ctx context.Context, response any) error {
 	res, _ := json.Marshal(response)
+	s.server.recordChatResponse(ctx, s.session, "", res)
 
 	_, err := fmt.Fprintf(s.writer, "%s\n", res)
 	return err
@@ -282,6 +292,11 @@ func sseHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 	}
 	s.sseManager.add(sessionId, session)
 	defer s.sseManager.remove(sessionId)
+	defer func() {
+		if s.chatStore != nil {
+			_ = s.chatStore.ArchiveSession(sessionId)
+		}
+	}()
 
 	// https scheme formatting if (forwarded) request is a TLS request
 	proto := r.Header.Get("X-Forwarded-Proto")
@@ -356,6 +371,7 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 	if headerSessionId != "" {
 		protocolVersion = v20250326.PROTOCOL_VERSION
 	}
+	sessionId = resolveSessionID(paramSessionId, headerSessionId)
 
 	toolsetName := chi.URLParam(r, "toolsetName")
 	s.logger.DebugContext(ctx, fmt.Sprintf("toolset name: %s", toolsetName))
@@ -389,6 +405,7 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		render.JSON(w, r, jsonrpc.NewError(id, jsonrpc.PARSE_ERROR, err.Error(), nil))
 	}
 
+	s.recordChatMessage(ctx, sessionId, toolsetName, body)
 	v, res, err := processMcpMessage(ctx, body, s, protocolVersion, toolsetName)
 	// notifications will return empty string
 	if res == nil {
@@ -403,7 +420,6 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 
 	// for v20250326, add the `Mcp-Session-Id` header
 	if v == v20250326.PROTOCOL_VERSION {
-		sessionId = uuid.New().String()
 		w.Header().Set("Mcp-Session-Id", sessionId)
 	}
 
@@ -419,6 +435,9 @@ func httpHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 			s.logger.DebugContext(ctx, "unable to add to event queue")
 		}
 	}
+
+	responseData, _ := json.Marshal(res)
+	s.recordChatResponse(ctx, sessionId, toolsetName, responseData)
 
 	// send HTTP response
 	render.JSON(w, r, res)
@@ -487,4 +506,14 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 		res, err := mcp.ProcessMethod(ctx, protocolVersion, baseMessage.Id, baseMessage.Method, toolset, s.ResourceMgr.GetToolsMap(), body)
 		return "", res, err
 	}
+}
+
+func resolveSessionID(paramSessionID, headerSessionID string) string {
+	if paramSessionID != "" {
+		return paramSessionID
+	}
+	if headerSessionID != "" {
+		return headerSessionID
+	}
+	return uuid.New().String()
 }
